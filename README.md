@@ -1,3 +1,3 @@
-# gnumig
+# gnuhurd
 
-Mach Interface Generator
+Operating System
