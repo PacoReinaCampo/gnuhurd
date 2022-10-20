@@ -1,6 +1,6 @@
 # gnuhurd
 ## QueenField
 
-![QueenField](../master/icon.jpg)
+![QueenField](../master/hurd.svg)
 
 **Operating System for RTOS**

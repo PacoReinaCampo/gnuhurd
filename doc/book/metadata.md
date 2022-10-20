@@ -1,6 +1,6 @@
 ---
 title: 'SoC-RTOS'
-subtitle: 'QueenField ![](../../hurd.svg){width=17cm}'
+subtitle: 'QueenField ![](../../icon.jpg)'
 
 author: Paco Reina Campo
 
