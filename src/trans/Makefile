@@ -53,7 +53,7 @@ device_reply-MIGSFLAGS=\
 fsys-MIGSFLAGS = "-DHURD_DEFAULT_PAYLOAD_TO_PORT=1"
 fsysServer-CFLAGS = "-DMIG_EOPNOTSUPP=EOPNOTSUPP"
 
-# If we have a configured tree, include the configuration so that we
+# If we have a configured.vcd --wave=system.ghw --stop-time=1ms, include the configuration so that we
 # can conditionally build translators.
 ifneq (,$(wildcard ../config.make))
  include ../config.make

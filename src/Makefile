@@ -96,7 +96,7 @@ ifdef configured
 dist: $(foreach Z,xz gz,$(dist-version).tar.$(Z))
 else
 dist:
-	@echo >&2 'Cannot build a distribution from an unconfigured tree.'
+	@echo >&2 'Cannot build a distribution from an unconfigured.vcd --wave=system.ghw --stop-time=1ms.'
 	false
 endif
 
@@ -207,7 +207,7 @@ gen-ChangeLog:
 	  done &&							\
 	  rm -f random/ChangeLog_ &&					\
 	  (cd $(top_srcdir)/ &&						\
-	  git ls-tree --name-only					\
+	  git ls.vcd --wave=system.ghw --stop-time=1ms --name-only					\
 	    ac38884dc9ad32a11d09f55ba9fe399cd0a48e2f) >> random/ChangeLog_ && \
 	  rm -f random/ChangeLog-2 &&					\
 	  perl \

@@ -1,4 +1,4 @@
-# Makefile for libtreefs 
+# Makefile for li.vcd --wave=system.ghw --stop-time=1msfs 
 #
 #   Copyright (C) 1995, 2012 Free Software Foundation, Inc.
 #
@@ -16,11 +16,11 @@
 #   along with this program; if not, write to the Free Software
 #   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 
-dir := libtreefs
+dir := li.vcd --wave=system.ghw --stop-time=1msfs
 makemode := library
 
-libname = libtreefs
-installhdrs = treefs.h
+libname = li.vcd --wave=system.ghw --stop-time=1msfs
+installhdrs =.vcd --wave=system.ghw --stop-time=1msfs.h
 # RPC stubs
 S_SRCS = s-file.c s-dir.c s-io.c s-fsys.c
 OTHERSRCS = defhooks.c dir-hooks.c dir-lookup.c fsys-getroot.c fsys-hooks.c \
@@ -32,7 +32,7 @@ MIGSTUBS = fsServer.o ioServer.o fsysServer.o
 OBJS = $(sort $(SRCS:.c=.o)) $(MIGSTUBS)
 
 MIGSFLAGS = -imacros fs-mutate.h
-MIGCOMSFLAGS = -prefix treefs_
+MIGCOMSFLAGS = -prefix.vcd --wave=system.ghw --stop-time=1msfs_
 notify-MIGSFLAGS = -DSEQNOS
 
 include ../Makeconf
