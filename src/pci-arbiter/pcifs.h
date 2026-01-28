@@ -91,6 +91,20 @@ struct pcifs_dirent
    * Only for entries having a full B/D/F address.
    */
   struct pci_device *device;
+
+  /*
+   * Array of addresses where regions are mapped
+   *
+   * Only when a device is present
+   */
+  void *region_maps[6];
+
+  /*
+   * Address where the rom is mapped
+   *
+   * Only when a device is present
+   */
+  void *rom_map;
 };
 
 /*
@@ -135,11 +149,14 @@ struct pcifs_perm
   int32_t gid;
 };
 
-/* Various parameters that can be used to change the behavior of an ftpfs.  */
+/* Various parameters that can be used to change the behavior of a pcifs.  */
 struct pcifs_params
 {
   /* The size of the node cache.  */
   size_t node_cache_max;
+
+  /* Next bootstrap task */
+  mach_port_t next_task;
 
   /* FS permissions.  */
   struct pcifs_perm *perms;
@@ -202,7 +219,8 @@ extern volatile struct mapped_time_value *pcifs_maptime;
 
 /* FS manipulation functions */
 error_t alloc_file_system (struct pcifs **fs);
-error_t init_file_system (file_t underlying_node, struct pcifs *fs);
+error_t init_root_node (file_t underlying_node);
+error_t init_file_system (struct pcifs *fs);
 error_t create_fs_tree (struct pcifs *fs);
 error_t fs_set_permissions (struct pcifs *fs);
 error_t entry_check_perms (struct iouser *user, struct pcifs_dirent *e,

@@ -28,7 +28,7 @@
 
 struct args
 {
-  char *data;
+  const char *data;
   mach_msg_type_number_t len;
   int do_children;
 };
@@ -46,11 +46,11 @@ helper (void *cookie, const char *name, mach_port_t control)
 }
 
 /* Implement fsys_set_options as described in <hurd/fsys.defs>. */
-error_t
+kern_return_t
 netfs_S_fsys_set_options (struct netfs_control *pt,
 			  mach_port_t reply,
 			  mach_msg_type_name_t reply_type,
-			  data_t data, mach_msg_type_number_t data_len,
+			  const_data_t data, mach_msg_type_number_t data_len,
 			  int do_children)
 {
   error_t err = 0;

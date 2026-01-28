@@ -53,7 +53,7 @@ device_reply-MIGSFLAGS=\
 fsys-MIGSFLAGS = "-DHURD_DEFAULT_PAYLOAD_TO_PORT=1"
 fsysServer-CFLAGS = "-DMIG_EOPNOTSUPP=EOPNOTSUPP"
 
-# If we have a configured.vcd --wave=system.ghw --stop-time=1ms, include the configuration so that we
+# If we have a configured tree, include the configuration so that we
 # can conditionally build translators.
 ifneq (,$(wildcard ../config.make))
  include ../config.make
@@ -81,6 +81,7 @@ symlink: fsysServer.o
 fakeroot: ../libnetfs/libnetfs.a
 fifo new-fifo: ../libpipe/libpipe.a
 crash fifo firmlink hello hello-mt ifsock magic mtab new-fifo null password proxy-defpager remap streamio: ../libtrivfs/libtrivfs.a
+random-LDFLAGS = -Wl,--export-dynamic-symbol=__trivfs_server_name
 $(targets): ../libfshelp/libfshelp.a \
 	../libihash/libihash.a \
 	../libiohelp/libiohelp.a \

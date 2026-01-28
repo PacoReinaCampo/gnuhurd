@@ -33,20 +33,20 @@ kern_return_t
 diskfs_S_file_exec (struct protid *cred,
 		    task_t task,
 		    int flags,
-		    data_t argv,
-		    size_t argvlen,
-		    data_t envp,
-		    size_t envplen,
-		    mach_port_t *fds,
-		    size_t fdslen,
-		    mach_port_t *portarray,
-		    size_t portarraylen,
-		    int *intarray,
-		    size_t intarraylen,
-		    mach_port_t *deallocnames,
-		    size_t deallocnameslen,
-		    mach_port_t *destroynames,
-		    size_t destroynameslen)
+		    const_data_t argv,
+                    mach_msg_type_number_t argvlen,
+		    const_data_t envp,
+                    mach_msg_type_number_t envplen,
+		    const mach_port_t *fds,
+                    mach_msg_type_number_t fdslen,
+		    const mach_port_t *portarray,
+                    mach_msg_type_number_t portarraylen,
+		    const int *intarray,
+                    mach_msg_type_number_t intarraylen,
+		    const mach_port_t *deallocnames,
+                    mach_msg_type_number_t deallocnameslen,
+		    const mach_port_t *destroynames,
+                    mach_msg_type_number_t destroynameslen)
 {
   return diskfs_S_file_exec_paths (cred,
 				   task,
@@ -66,22 +66,22 @@ kern_return_t
 diskfs_S_file_exec_paths (struct protid *cred,
 			  task_t task,
 			  int flags,
-			  char *path,
-			  char *abspath,
-			  char *argv,
-			  size_t argvlen,
-			  char *envp,
-			  size_t envplen,
-			  mach_port_t *fds,
-			  size_t fdslen,
-			  mach_port_t *portarray,
-			  size_t portarraylen,
-			  int *intarray,
-			  size_t intarraylen,
-			  mach_port_t *deallocnames,
-			  size_t deallocnameslen,
-			  mach_port_t *destroynames,
-			  size_t destroynameslen)
+			  const_string_t path,
+			  const_string_t abspath,
+			  const_data_t argv,
+                          mach_msg_type_number_t argvlen,
+			  const_data_t envp,
+                          mach_msg_type_number_t envplen,
+			  const mach_port_t *fds,
+                          mach_msg_type_number_t fdslen,
+			  const mach_port_t *portarray,
+                          mach_msg_type_number_t portarraylen,
+			  const int *intarray,
+                          mach_msg_type_number_t intarraylen,
+			  const mach_port_t *deallocnames,
+                          mach_msg_type_number_t deallocnameslen,
+			  const mach_port_t *destroynames,
+                          mach_msg_type_number_t destroynameslen)
 {
   struct node *np;
   uid_t uid;
@@ -94,7 +94,7 @@ diskfs_S_file_exec_paths (struct protid *cred,
   mach_port_t execserver;
   int cached_exec;
   struct hurd_userlink ulink;
-  mach_port_t right;
+  mach_port_t right, cred_right;
 
 #define RETURN(code) do { err = (code); goto out; } while (0)
 
@@ -155,7 +155,8 @@ diskfs_S_file_exec_paths (struct protid *cred,
       err =
 	fshelp_exec_reauth (suid, uid, sgid, gid,
 			    diskfs_auth_server_port, get_file_ids,
-			    portarray, portarraylen, fds, fdslen, &secure);
+			    (mach_port_t *) portarray, portarraylen,
+			    (mach_port_t *) fds, fdslen, &secure);
       if (secure)
 	flags |= EXEC_SECURE | EXEC_NEWTASK;
     }
@@ -195,6 +196,11 @@ diskfs_S_file_exec_paths (struct protid *cred,
       do
 	{
 	  right = ports_get_send_right (newpi);
+
+	  /* Add a gratuitous send right on the protid to avoid a no-sender, and thus
+	     interrupt the exec, just because we are precisely replacing the calling
+	     process!  */
+	  cred_right = ports_get_send_right (cred);
 #ifdef HAVE_EXEC_EXEC_PATHS
 	  err = exec_exec_paths (execserver,
 				 right, MACH_MSG_TYPE_COPY_SEND,
@@ -221,6 +227,7 @@ diskfs_S_file_exec_paths (struct protid *cred,
 
 
 	  mach_port_deallocate (mach_task_self (), right);
+	  mach_port_deallocate (mach_task_self (), cred_right);
 	  if (err == MACH_SEND_INVALID_DEST)
 	    {
 	      if (cached_exec)

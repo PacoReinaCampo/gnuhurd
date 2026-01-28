@@ -84,6 +84,7 @@ extern struct argp pfinet_argp;
 #include "socket_S.h"
 #include "pfinet_S.h"
 #include "iioctl_S.h"
+#include "rioctl_S.h"
 #include "startup_notify_S.h"
 
 int
@@ -112,6 +113,7 @@ pfinet_demuxer (mach_msg_header_t *inp,
       if ((routine = io_server_routine (inp)) ||
           (routine = socket_server_routine (inp)) ||
           (routine = pfinet_server_routine (inp)) ||
+          (routine = rioctl_server_routine (inp)) ||
           (routine = iioctl_server_routine (inp)) ||
           (routine = NULL, trivfs_demuxer (inp, outp)) ||
           (routine = startup_notify_server_routine (inp)))
@@ -128,6 +130,7 @@ pfinet_demuxer (mach_msg_header_t *inp,
       mig_routine_t routine;
       if ((routine = socket_server_routine (inp)) ||
           (routine = pfinet_server_routine (inp)) ||
+          (routine = rioctl_server_routine (inp)) ||
           (routine = iioctl_server_routine (inp)) ||
           (routine = NULL, trivfs_demuxer (inp, outp)) ||
           (routine = startup_notify_server_routine (inp)))
@@ -143,7 +146,7 @@ pfinet_demuxer (mach_msg_header_t *inp,
 
 /* The system is going down; destroy all the extant port rights.  That
    will cause net channels and such to close promptly.  */
-error_t
+kern_return_t
 S_startup_dosync (mach_port_t handle)
 {
   struct port_info *inpi = ports_lookup_port (pfinet_bucket, handle,
@@ -166,7 +169,7 @@ sigterm_handler (int signo)
 }
 
 void
-arrange_shutdown_notification ()
+arrange_shutdown_notification (void)
 {
   error_t err;
   mach_port_t initport, notify;
@@ -343,8 +346,7 @@ main (int argc,
 
   if (bootstrap != MACH_PORT_NULL) {
     /* Create portclass to install on the bootstrap port. */
-    if(pfinet_protid_portclasses[pfinet_bootstrap_portclass]
-       != MACH_PORT_NULL)
+    if(pfinet_protid_portclasses[pfinet_bootstrap_portclass] != NULL)
       error(1, 0, "No portclass left to assign to bootstrap port");
 
 #ifdef CONFIG_IPV6
@@ -386,7 +388,7 @@ main (int argc,
     /* Check that at least one portclass has been bound, 
        error out otherwise. */
     for (i = 0; i < ARRAY_SIZE (pfinet_protid_portclasses); i++)
-      if (pfinet_protid_portclasses[i] != MACH_PORT_NULL)
+      if (pfinet_protid_portclasses[i] != NULL)
 	break;
 
     if (i == ARRAY_SIZE (pfinet_protid_portclasses))
@@ -439,7 +441,7 @@ pfinet_bind (int portclass, const char *name)
     err = errno;
 
   if (! err) {
-    if (pfinet_protid_portclasses[portclass] != MACH_PORT_NULL)
+    if (pfinet_protid_portclasses[portclass] != NULL)
       error (1, 0, "Cannot bind one protocol to multiple nodes.\n");
 
 #ifdef CONFIG_IPV6

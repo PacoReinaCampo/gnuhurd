@@ -293,6 +293,8 @@ input_loop (void *unused)
   fd_set rfds;
   int w_escaped = 0;
 
+  pthread_setname_np (pthread_self (), "input");
+
   FD_ZERO (&rfds);
   FD_SET (fd, &rfds);
 
@@ -436,7 +438,7 @@ conchar_attr_to_attr (conchar_attr_t attr)
 static inline short
 conchar_attr_to_color_pair (conchar_attr_t attr)
 {
-  return COLOR_PAIR (attr.bgcol << 3 | attr.fgcol);
+  return attr.bgcol << 3 | attr.fgcol;
 }
 
 static void

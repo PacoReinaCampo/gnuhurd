@@ -23,6 +23,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <inttypes.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
 #include <sys/statvfs.h>
@@ -105,6 +106,36 @@ diskfs_new_hardrefs (struct node *np)
 {
   allow_pager_softrefs (np);
 }
+
+static inline void
+ext2_decode_extra_time (uint32_t legacy_sec, uint32_t extra,
+                        time_t *sec, long *nsec)
+{
+  /* Epoch extension (bits 32 and 33) */
+  *sec = (time_t)legacy_sec + (((time_t)extra & 0x3) << 32);
+  /* Nanoseconds (bits 2 through 31) */
+  *nsec = (long)(extra >> 2);
+}
+
+static inline uint32_t
+ext2_encode_extra_time (time_t sec, long nsec)
+{
+  uint32_t extra;
+  /* Pack nanoseconds into the upper 30 bits */
+  extra = (uint32_t)(nsec << 2);
+  /* Pack bits 32 and 33 of seconds into the lower 2 bits */
+  extra |= (uint32_t)((sec >> 32) & 0x3);
+  return extra;
+}
+
+/* Helper to check if the current filesystem supports extended inodes */
+static inline int
+ext2_has_extra_inodes (struct ext2_super_block *sb)
+{
+  return (le32toh (sb->s_rev_level) > EXT2_GOOD_OLD_REV
+          && le16toh (sb->s_inode_size) > EXT2_GOOD_OLD_INODE_SIZE);
+}
+
 
 /* The user must define this function if she wants to use the node
    cache.  Read stat information out of the on-disk node.  */
@@ -130,45 +161,51 @@ diskfs_user_read_node (struct node *np, struct lookup_context *ctx)
   st->st_ino = np->cache_id;
   st->st_blksize = vm_page_size * 2;
 
-  st->st_nlink = di->i_links_count;
-  st->st_size = di->i_size;
-  st->st_gen = di->i_generation;
+  st->st_nlink = le16toh (di->i_links_count);
+  st->st_size = le32toh (di->i_size);
+  st->st_gen = le32toh (di->i_generation);
 
-  st->st_atim.tv_sec = di->i_atime;
-#ifdef not_yet
-  /* ``struct ext2_inode'' doesn't do better than sec. precision yet.  */
-#else
-  st->st_atim.tv_nsec = 0;
-#endif
-  st->st_mtim.tv_sec = di->i_mtime;
-#ifdef not_yet
-  /* ``struct ext2_inode'' doesn't do better than sec. precision yet.  */
-#else
-  st->st_mtim.tv_nsec = 0;
-#endif
-  st->st_ctim.tv_sec = di->i_ctime;
-#ifdef not_yet
-  /* ``struct ext2_inode'' doesn't do better than sec. precision yet.  */
-#else
-  st->st_ctim.tv_nsec = 0;
-#endif
+  st->st_atim.tv_sec = le32toh (di->i_atime);
+  st->st_mtim.tv_sec = le32toh (di->i_mtime);
+  st->st_ctim.tv_sec = le32toh (di->i_ctime);
+  st->st_atim.tv_nsec = st->st_mtim.tv_nsec = st->st_ctim.tv_nsec = 0;
+  if (ext2_has_extra_inodes (sblock))
+    {
+      struct ext2_inode_extra *di_extra =
+	  (struct ext2_inode_extra *) ((char *) di + EXT2_GOOD_OLD_INODE_SIZE);
 
-  st->st_blocks = di->i_blocks;
+      /* Only decode if the inode actually uses the extra space (i_extra_isize)
+	 The i_extra_isize tells us how many extra bytes are used in THIS inode. */
+      if (le16toh (di_extra->i_extra_isize) >= EXT2_INODE_EXTRA_TIME_SIZE)
+	{
+	  ext2_decode_extra_time (le32toh (di->i_atime),
+                                  le32toh (di_extra->i_atime_extra),
+                                  &st->st_atim.tv_sec, &st->st_atim.tv_nsec);
+          ext2_decode_extra_time (le32toh (di->i_ctime),
+                                  le32toh (di_extra->i_ctime_extra),
+                                  &st->st_ctim.tv_sec, &st->st_ctim.tv_nsec);
+          ext2_decode_extra_time (le32toh (di->i_mtime),
+                                  le32toh (di_extra->i_mtime_extra),
+                                  &st->st_mtim.tv_sec, &st->st_mtim.tv_nsec);
+        }
+    }
+
+  st->st_blocks = le32toh (di->i_blocks);
 
   st->st_flags = 0;
-  if (di->i_flags & EXT2_APPEND_FL)
+  if (di->i_flags & htole32 (EXT2_APPEND_FL))
     st->st_flags |= UF_APPEND;
-  if (di->i_flags & EXT2_NODUMP_FL)
+  if (di->i_flags & htole32 (EXT2_NODUMP_FL))
     st->st_flags |= UF_NODUMP;
-  if (di->i_flags & EXT2_IMMUTABLE_FL)
+  if (di->i_flags & htole32 (EXT2_IMMUTABLE_FL))
     st->st_flags |= UF_IMMUTABLE;
 
-  if (sblock->s_creator_os == EXT2_OS_HURD)
+  if (sblock->s_creator_os == htole32 (EXT2_OS_HURD))
     {
-      st->st_mode = di->i_mode | (di->i_mode_high << 16);
+      st->st_mode = le16toh (di->i_mode) | (le16toh (di->i_mode_high) << 16);
       st->st_mode &= ~S_ITRANS;
 
-      if (di->i_translator)
+      if (le32toh (di->i_translator))
 	st->st_mode |= S_IPTRANS;
       else
 	{
@@ -178,44 +215,51 @@ diskfs_user_read_node (struct node *np, struct lookup_context *ctx)
 	    st->st_mode |= S_IPTRANS;
 	}
 
-      st->st_uid = di->i_uid | (di->i_uid_high << 16);
-      st->st_gid = di->i_gid | (di->i_gid_high << 16);
+      st->st_uid = le16toh (di->i_uid) | (le16toh (di->i_uid_high) << 16);
+      st->st_gid = le16toh (di->i_gid) | (le16toh (di->i_gid_high) << 16);
 
-      st->st_author = di->i_author;
+      st->st_author = le32toh (di->i_author);
       if (st->st_author == -1)
 	st->st_author = st->st_uid;
     }
   else
     {
-      st->st_mode = di->i_mode & ~S_ITRANS;
-      st->st_uid = di->i_uid;
-      st->st_gid = di->i_gid;
+      size_t datalen = 0;
+
+      st->st_mode = le16toh (di->i_mode) & ~S_ITRANS;
+
+      err = ext2_get_xattr (np, "gnu.translator", NULL, &datalen);
+      if (! err && datalen > 0)
+	st->st_mode |= S_IPTRANS;
+
+      st->st_uid = le16toh (di->i_uid);
+      st->st_gid = le16toh (di->i_gid);
       st->st_author = st->st_uid;
       np->author_tracks_uid = 1;
     }
 
   /* Setup the ext2fs auxiliary inode info.  */
-  info->i_dtime = di->i_dtime;
-  info->i_flags = di->i_flags;
-  info->i_faddr = di->i_faddr;
+  info->i_dtime = le32toh (di->i_dtime);
+  info->i_flags = le32toh (di->i_flags);
+  info->i_faddr = le32toh (di->i_faddr);
   info->i_frag_no = di->i_frag;
   info->i_frag_size = di->i_fsize;
   info->i_osync = 0;
-  info->i_file_acl = di->i_file_acl;
+  info->i_file_acl = le32toh (di->i_file_acl);
   if (S_ISDIR (st->st_mode))
-    info->i_dir_acl = di->i_dir_acl;
+    info->i_dir_acl = le32toh (di->i_dir_acl);
   else
     {
       info->i_dir_acl = 0;
       if (sizeof (off_t) >= 8)
 	/* 64bit file size */
-	st->st_size += ((off_t) di->i_size_high) << 32;
+	st->st_size += ((off_t) le32toh (di->i_size_high)) << 32;
       else
 	{
-	  if (di->i_size_high)	/* XXX */
+	  if (le32toh (di->i_size_high))	/* XXX */
 	    {
 	      dino_deref (di);
-	      ext2_warning ("cannot handle large file inode %Ld", np->cache_id);
+	      ext2_warning ("cannot handle large file inode %" PRIu64, np->cache_id);
 	      diskfs_end_catch_exception ();
 	      return EFBIG;
 	    }
@@ -230,14 +274,18 @@ diskfs_user_read_node (struct node *np, struct lookup_context *ctx)
   dn->last_page_partially_writable = 0;
 
   if (S_ISCHR (st->st_mode) || S_ISBLK (st->st_mode))
-    st->st_rdev = di->i_block[0];
+    st->st_rdev = le32toh (di->i_block[0]);
   else
     {
+      /*
+       * NOTE! The in-memory inode i_data array is in little-endian order
+       * even on big-endian machines: we do NOT byteswap the block numbers!
+       */
       memcpy (info->i_data, di->i_block,
 	      EXT2_N_BLOCKS * sizeof info->i_data[0]);
       st->st_rdev = 0;
     }
-  dn->info_i_translator = di->i_translator;
+  dn->info_i_translator = le32toh (di->i_translator);
 
   dino_deref (di);
   diskfs_end_catch_exception ();
@@ -280,7 +328,7 @@ diskfs_user_read_node (struct node *np, struct lookup_context *ctx)
 static inline error_t
 check_high_bits (struct node *np, long l)
 {
-  if (sblock->s_creator_os == EXT2_OS_HURD)
+  if (sblock->s_creator_os == htole32 (EXT2_OS_HURD))
     return 0;
 
   /* Linux 2.3.42 has a mount-time option (not a bit stored on disk)
@@ -325,7 +373,7 @@ diskfs_validate_mode_change (struct node *np, mode_t mode)
 error_t
 diskfs_validate_author_change (struct node *np, uid_t author)
 {
-  if (sblock->s_creator_os == EXT2_OS_HURD)
+  if (sblock->s_creator_os == htole32 (EXT2_OS_HURD))
     return 0;
   else
     /* For non-hurd filesystems, the author & owner are the same.  */
@@ -372,7 +420,7 @@ write_node (struct node *np)
 
       di = dino_ref (np->cache_id);
 
-      di->i_generation = st->st_gen;
+      di->i_generation = htole32 (st->st_gen);
 
       /* We happen to know that the stat mode bits are the same
 	 as the ext2fs mode bits. */
@@ -380,43 +428,48 @@ write_node (struct node *np)
 
       /* Only the low 16 bits of these fields are standard across all ext2
 	 implementations.  */
-      di->i_mode = st->st_mode & 0xFFFF & ~S_ITRANS;
-      di->i_uid = st->st_uid & 0xFFFF;
-      di->i_gid = st->st_gid & 0xFFFF;
+      di->i_mode = htole16 (st->st_mode & 0xFFFF & ~S_ITRANS);
+      di->i_uid = htole16 (st->st_uid & 0xFFFF);
+      di->i_gid = htole16 (st->st_gid & 0xFFFF);
 
-      if (sblock->s_creator_os == EXT2_OS_HURD)
+      if (sblock->s_creator_os == htole32 (EXT2_OS_HURD))
 	/* If this is a hurd-compatible filesystem, write the high bits too. */
 	{
-	  di->i_mode_high = (st->st_mode >> 16) & 0xffff & ~S_ITRANS;
-	  di->i_uid_high = st->st_uid >> 16;
-	  di->i_gid_high = st->st_gid >> 16;
-	  di->i_author = st->st_author;
+	  di->i_mode_high = htole16 (((st->st_mode & ~S_ITRANS) >> 16) & 0xffff);
+	  di->i_uid_high = htole16 (st->st_uid >> 16);
+	  di->i_gid_high = htole16 (st->st_gid >> 16);
+	  di->i_author = htole32 (st->st_author);
 	}
       else
 	/* No hurd extensions should be turned on.  */
 	{
 	  assert_backtrace ((st->st_uid & ~0xFFFF) == 0);
 	  assert_backtrace ((st->st_gid & ~0xFFFF) == 0);
-	  assert_backtrace ((st->st_mode & ~0xFFFF) == 0);
+	  assert_backtrace (((st->st_mode & ~S_ITRANS) & ~0xFFFF) == 0);
 	  assert_backtrace (np->author_tracks_uid && st->st_author == st->st_uid);
 	}
 
-      di->i_links_count = st->st_nlink;
+      di->i_links_count = htole16 (st->st_nlink);
 
-      di->i_atime = st->st_atim.tv_sec;
-#ifdef not_yet
-      /* ``struct ext2_inode'' doesn't do better than sec. precision yet.  */
-      di->i_atime.tv_nsec = st->st_atim.tv_nsec;
-#endif
-      di->i_mtime = st->st_mtim.tv_sec;
-#ifdef not_yet
-      di->i_mtime.tv_nsec = st->st_mtim.tv_nsec;
-#endif
-      di->i_ctime = st->st_ctim.tv_sec;
-#ifdef not_yet
-      di->i_ctime.tv_nsec = st->st_ctim.tv_nsec;
-#endif
+      di->i_atime = htole32(st->st_atim.tv_sec);
+      di->i_mtime = htole32 (st->st_mtim.tv_sec);
+      di->i_ctime = htole32 (st->st_ctim.tv_sec);
+      if (ext2_has_extra_inodes (sblock))
+	{
+	  struct ext2_inode_extra *di_extra =
+	      (struct ext2_inode_extra *) ((char *) di + EXT2_GOOD_OLD_INODE_SIZE);
 
+          if (le16toh (di_extra->i_extra_isize) < EXT2_INODE_EXTRA_TIME_SIZE)
+            di_extra->i_extra_isize = htole16 (EXT2_INODE_EXTRA_TIME_SIZE);
+
+          di_extra->i_checksum_hi = 0;
+	  di_extra->i_atime_extra = htole32 (ext2_encode_extra_time (st->st_atim.tv_sec,
+                                                                    st->st_atim.tv_nsec));
+	  di_extra->i_mtime_extra = htole32 (ext2_encode_extra_time (st->st_mtim.tv_sec,
+                                                                    st->st_mtim.tv_nsec));
+	  di_extra->i_ctime_extra = htole32 (ext2_encode_extra_time (st->st_ctim.tv_sec,
+                                                                    st->st_ctim.tv_nsec));
+	}
       /* Convert generic flags in ST->st_flags to ext2-specific flags in DI
          (but don't mess with ext2 flags we don't know about).  The original
 	 set was copied from DI into INFO by read_node, but might have been
@@ -429,25 +482,25 @@ write_node (struct node *np)
 	info->i_flags |= EXT2_NODUMP_FL;
       if (st->st_flags & UF_IMMUTABLE)
 	info->i_flags |= EXT2_IMMUTABLE_FL;
-      di->i_flags = info->i_flags;
+      di->i_flags = htole32 (info->i_flags);
 
       if (st->st_mode == 0)
 	/* Set dtime non-zero to indicate a deleted file.
 	   We don't clear i_size, i_blocks, and i_translator in this case,
 	   to give "undeletion" utilities a chance.  */
-	di->i_dtime = di->i_mtime;
+	di->i_dtime = htole32 (di->i_mtime);
       else
 	{
-	  di->i_dtime = 0;
-	  di->i_size = st->st_size;
+	  di->i_dtime = htole32 (0);
+	  di->i_size = htole32 (st->st_size);
 	  if (sizeof (off_t) >= 8 && !S_ISDIR (st->st_mode))
 	    /* 64bit file size */
-	    di->i_size_high = st->st_size >> 32;
-	  di->i_blocks = st->st_blocks;
+	    di->i_size_high = htole32 (st->st_size >> 32);
+	  di->i_blocks = htole32 (st->st_blocks);
 	}
 
       if (S_ISCHR(st->st_mode) || S_ISBLK(st->st_mode))
-	di->i_block[0] = st->st_rdev;
+	di->i_block[0] = htole32 (st->st_rdev);
       else
 	memcpy (di->i_block, diskfs_node_disknode (np)->info.i_data,
 		EXT2_N_BLOCKS * sizeof di->i_block[0]);
@@ -483,7 +536,7 @@ diskfs_node_reload (struct node *node)
 
 /* Write all active disknodes into the ext2_inode pager. */
 void
-write_all_disknodes ()
+write_all_disknodes (void)
 {
   error_t write_one_disknode (struct node *node)
     {
@@ -529,15 +582,15 @@ diskfs_set_statfs (struct statfs *st)
 {
   st->f_type = FSTYPE_EXT2FS;
   st->f_bsize = block_size;
-  st->f_blocks = sblock->s_blocks_count;
-  st->f_bfree = sblock->s_free_blocks_count;
-  st->f_bavail = st->f_bfree - sblock->s_r_blocks_count;
-  if (st->f_bfree < sblock->s_r_blocks_count)
+  st->f_blocks = le32toh (sblock->s_blocks_count);
+  st->f_bfree = le32toh (sblock->s_free_blocks_count);
+  st->f_bavail = st->f_bfree - le32toh (sblock->s_r_blocks_count);
+  if (st->f_bfree < le32toh (sblock->s_r_blocks_count))
     st->f_bavail = 0;
-  st->f_files = sblock->s_inodes_count;
-  st->f_ffree = sblock->s_free_inodes_count;
+  st->f_files = le32toh (sblock->s_inodes_count);
+  st->f_ffree = le32toh (sblock->s_free_inodes_count);
   st->f_fsid = getpid ();
-  st->f_namelen = 0;
+  st->f_namelen = EXT2_NAME_LEN;
   st->f_favail = st->f_ffree;
   st->f_frsize = frag_size;
   return 0;
@@ -546,15 +599,12 @@ diskfs_set_statfs (struct statfs *st)
 /* Implement the diskfs_set_translator callback from the diskfs
    library; see <hurd/diskfs.h> for the interface description. */
 error_t
-diskfs_set_translator (struct node *np, const char *name, unsigned namelen,
+diskfs_set_translator (struct node *np, const char *name, mach_msg_type_number_t namelen,
 		       struct protid *cred)
 {
   error_t err;
 
   assert_backtrace (!diskfs_readonly);
-
-  if (sblock->s_creator_os != EXT2_OS_HURD)
-    return EOPNOTSUPP;
 
   err = diskfs_catch_exception ();
   if (err)
@@ -569,7 +619,7 @@ diskfs_set_translator (struct node *np, const char *name, unsigned namelen,
       struct ext2_inode *di;
 
       di = dino_ref (np->cache_id);
-      blkno = di->i_translator;
+      blkno = le32toh (di->i_translator);
 
       /* If a legacy translator record found, clear it */
       if (blkno)
@@ -577,7 +627,7 @@ diskfs_set_translator (struct node *np, const char *name, unsigned namelen,
 	  ext2_debug ("Old translator record found, clear it");
 
 	  /* Clear block for translator going away. */
-	  di->i_translator = 0;
+	  di->i_translator = htole32 (0);
 	  diskfs_node_disknode (np)->info_i_translator = 0;
 	  record_global_poke (di);
 	  ext2_free_blocks (blkno, 1);
@@ -617,7 +667,7 @@ diskfs_set_translator (struct node *np, const char *name, unsigned namelen,
 	    }
 	}
     }
-  else
+  else if (sblock->s_creator_os == htole32 (EXT2_OS_HURD))
     {
       /* Use legacy translator record when xattr is not supported */
       daddr_t blkno;
@@ -625,18 +675,36 @@ diskfs_set_translator (struct node *np, const char *name, unsigned namelen,
       char buf[block_size];
 
       if (namelen + 2 > block_size)
-	return ENAMETOOLONG;
+	{
+	  diskfs_end_catch_exception ();
+	  return ENAMETOOLONG;
+	}
 
       di = dino_ref (np->cache_id);
-      blkno = di->i_translator;
+      blkno = le32toh (di->i_translator);
 
       if (namelen && !blkno)
 	{
+	  mode_t newmode = 0;
+
+	  if (S_ISLNK (np->dn_stat.st_mode))
+	    {
+	      /* Avoid storing both a symlink and a translator,
+	       * e2fsck does not like it.  */
+	      newmode = (np->dn_stat.st_mode & ~S_IFMT) | S_IFREG;
+	      err = diskfs_validate_mode_change (np, newmode);
+	      if (err)
+		{
+		  diskfs_end_catch_exception ();
+		  return err;
+		}
+	    }
+
 	  /* Allocate block for translator */
 	  blkno =
 	    ext2_new_block ((diskfs_node_disknode (np)->info.i_block_group
 			    * EXT2_BLOCKS_PER_GROUP (sblock))
-			    + sblock->s_first_data_block,
+			    + le32toh (sblock->s_first_data_block),
 			    0, 0, 0);
 	  if (blkno == 0)
 	    {
@@ -645,7 +713,14 @@ diskfs_set_translator (struct node *np, const char *name, unsigned namelen,
 	      return ENOSPC;
 	    }
 
-	  di->i_translator = blkno;
+	  if (newmode)
+	    {
+	      /* Clear previous data */
+	      diskfs_truncate (np, 0);
+	      np->dn_stat.st_mode = newmode;
+	    }
+
+	  di->i_translator = htole32 (blkno);
 	  diskfs_node_disknode (np)->info_i_translator = blkno;
 	  record_global_poke (di);
 
@@ -655,7 +730,7 @@ diskfs_set_translator (struct node *np, const char *name, unsigned namelen,
       else if (!namelen && blkno)
 	{
 	  /* Clear block for translator going away. */
-	  di->i_translator = 0;
+	  di->i_translator = htole32 (0);
 	  diskfs_node_disknode (np)->info_i_translator = 0;
 	  record_global_poke (di);
 	  ext2_free_blocks (blkno, 1);
@@ -683,6 +758,12 @@ diskfs_set_translator (struct node *np, const char *name, unsigned namelen,
 	  np->dn_set_ctime = 1;
 	}
     }
+  else
+    {
+      diskfs_end_catch_exception ();
+      return EOPNOTSUPP;
+    }
+
 
   diskfs_end_catch_exception ();
   return err;
@@ -692,67 +773,79 @@ diskfs_set_translator (struct node *np, const char *name, unsigned namelen,
 /* Implement the diskfs_get_translator callback from the diskfs library.
    See <hurd/diskfs.h> for the interface description. */
 error_t
-diskfs_get_translator (struct node *np, char **namep, unsigned *namelen)
+diskfs_get_translator (struct node *np, char **namep, mach_msg_type_number_t *namelen)
 {
   error_t err = 0;
-  daddr_t blkno;
   size_t datalen;
-  void *transloc;
-  struct ext2_inode *di;
-
-  if (sblock->s_creator_os != EXT2_OS_HURD)
-    return EOPNOTSUPP;
 
   err = diskfs_catch_exception ();
   if (err)
     return err;
 
-  di = dino_ref (np->cache_id);
-  blkno = di->i_translator;
-  dino_deref (di);
-
-  /* If an old translator record found, read it firstly */
-  if (blkno)
+  if (sblock->s_creator_os == htole32 (EXT2_OS_HURD))
     {
-      /* If xattr is no supported by this filesystem, don't report a warning */
-      if (EXT2_HAS_COMPAT_FEATURE (sblock, EXT2_FEATURE_COMPAT_EXT_ATTR)
-	  && use_xattr_translator_records)
-	ext2_debug ("This is an old translator record, please update it");
+      daddr_t blkno;
+      void *transloc;
+      struct ext2_inode *di;
 
-      transloc = disk_cache_block_ref (blkno);
-      datalen =
-	((unsigned char *)transloc)[0] + (((unsigned char *)transloc)[1] << 8);
-      if (datalen > block_size - 2)
-	err = EFTYPE;  /* ? */
-      else
+      di = dino_ref (np->cache_id);
+      blkno = le32toh (di->i_translator);
+      dino_deref (di);
+
+      /* If an old translator record found, read it firstly */
+      if (blkno)
 	{
-	  *namep = malloc (datalen);
-	  if (!*namep)
-	    err = ENOMEM;
+	  /* If xattr is no supported by this filesystem, don't report a warning */
+	  if (EXT2_HAS_COMPAT_FEATURE (sblock, EXT2_FEATURE_COMPAT_EXT_ATTR)
+	      && use_xattr_translator_records)
+	    ext2_debug ("This is an old translator record, please update it");
+
+	  transloc = disk_cache_block_ref (blkno);
+	  datalen =
+	    ((unsigned char *)transloc)[0] + (((unsigned char *)transloc)[1] << 8);
+	  if (datalen > block_size - 2)
+	    err = EFTYPE;  /* ? */
 	  else
-	    memcpy (*namep, transloc + 2, datalen);
+	    {
+	      *namep = malloc (datalen);
+	      if (!*namep)
+		err = ENOMEM;
+	      else
+		memcpy (*namep, transloc + 2, datalen);
+	    }
+
+	  disk_cache_block_deref (transloc);
+	  diskfs_end_catch_exception ();
+
+	  *namelen = datalen;
+	  return err;
+	}
+    }
+
+  /* If xattr is supported by this filesystem, check for new translator record
+   * regardless of flag to use it or not */
+  if (EXT2_HAS_COMPAT_FEATURE (sblock, EXT2_FEATURE_COMPAT_EXT_ATTR))
+    {
+      err = ext2_get_xattr (np, "gnu.translator", NULL, &datalen);
+      if (err)
+	{
+	  diskfs_end_catch_exception ();
+	  return err;
 	}
 
-      disk_cache_block_deref (transloc);
+      *namep = malloc (datalen);
+      if (!*namep)
+        err = ENOMEM;
+      else
+        err = ext2_get_xattr (np, "gnu.translator", *namep, &datalen);
+
       diskfs_end_catch_exception ();
 
       *namelen = datalen;
-      return err;
     }
-
-  err = ext2_get_xattr (np, "gnu.translator", NULL, &datalen);
-  if (err)
-    return err;
-
-  *namep = malloc (datalen);
-  if (!*namep)
-    err = ENOMEM;
   else
-    err = ext2_get_xattr (np, "gnu.translator", *namep, &datalen);
+    diskfs_end_catch_exception ();
 
-  diskfs_end_catch_exception ();
-
-  *namelen = datalen;
   return err;
 }
 
@@ -805,7 +898,7 @@ error_t (*diskfs_read_symlink_hook)(struct node *np, char *target) =
 
 /* Called when all hard ports have gone away. */
 void
-diskfs_shutdown_soft_ports ()
+diskfs_shutdown_soft_ports (void)
 {
   /* Should initiate termination of internally held pager ports
      (the only things that should be soft) XXX */

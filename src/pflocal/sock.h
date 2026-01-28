@@ -74,10 +74,6 @@ struct sock
      one could tell anyway).  */
   struct addr *addr;
 
-  /* If this sock has been connected to another sock, then WRITE_ADDR is the
-     addr of that sock.  We *do* hold a reference to this addr.  */
-  struct addr *write_addr;
-
   /* A connection queue to listen for incoming connections on.  Once a socket
      has one of these, it always does, and can never again be used for
      anything but accepting incoming connections.  */
@@ -85,6 +81,10 @@ struct sock
   /* A connection queue we're attempting to connect through; a socket may
      only be attempting one connection at a time.  */
   struct connq *connect_queue;
+
+  /* Effective identity of the creator of the socket */
+  uid_t uid;
+  gid_t gid;
 };
 
 /* Socket flags */
@@ -180,11 +180,11 @@ error_t addr_create (struct addr **addr);
 error_t addr_get_sock (struct addr *addr, struct sock **sock);
 
 /* Prepare for socket creation.  */
-error_t sock_global_init ();
+error_t sock_global_init (void);
 
 /* Try to shutdown any active sockets, returning EBUSY if we can't.  Assumes
    non-socket RPCS's have been disabled.  */
-error_t sock_global_shutdown ();
+error_t sock_global_shutdown (void);
 
 /* Mostly here for use by mig-decls.h.  */
 extern struct port_class *sock_user_port_class;

@@ -29,11 +29,16 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <hurd/netfs.h>
+#include <hurd/paths.h>
+#include <mach/mach4.h>
+#include <device/device.h>
+
+#include <pciaccess.h>
 
 #include "pcifs.h"
 #include "ncache.h"
-#include <pciaccess.h>
 #include "func_files.h"
+#include "device_map.h"
 
 #define DIRENTS_CHUNK_SIZE      (8*1024)
 /* Returned directory entries are aligned to blocks this many bytes long.
@@ -59,25 +64,22 @@ get_dirents (struct pcifs_dirent *dir,
   int i, count;
   size_t size;
   char *p;
+  int nentries = (int)dir->dir->num_entries;
 
-  if (first_entry >= dir->dir->num_entries)
+  if (first_entry >= nentries)
     {
       *data_len = 0;
       *data_entries = 0;
       return 0;
     }
 
-  if (max_entries < 0)
-    count = dir->dir->num_entries;
-  else
-    {
-      count = ((first_entry + max_entries) >= dir->dir->num_entries ?
-	       dir->dir->num_entries : max_entries) - first_entry;
-    }
+  count = nentries - first_entry;
+  if (max_entries >= 0 && count > max_entries)
+    count = max_entries;
 
-  size =
-    (count * DIRENTS_CHUNK_SIZE) >
-    max_data_len ? max_data_len : count * DIRENTS_CHUNK_SIZE;
+  size = count * DIRENTS_CHUNK_SIZE;
+  if (max_data_len && size > max_data_len)
+    size = max_data_len;
 
   *data = mmap (0, size, PROT_READ | PROT_WRITE, MAP_ANON, 0, 0);
   err = ((void *) *data == (void *) -1) ? errno : 0;
@@ -118,7 +120,7 @@ get_dirents (struct pcifs_dirent *dir,
 }
 
 static struct pcifs_dirent *
-lookup (struct node *np, char *name)
+lookup (struct node *np, const char *name)
 {
   int i;
   struct pcifs_dirent *ret = 0, *e;
@@ -171,7 +173,7 @@ destroy_node (struct node *node)
    locked on success; no matter what, unlock DIR before returning.  */
 error_t
 netfs_attempt_create_file (struct iouser * user, struct node * dir,
-			   char *name, mode_t mode, struct node ** node)
+			   const char *name, mode_t mode, struct node ** node)
 {
   *node = 0;
   pthread_mutex_unlock (&dir->lock);
@@ -235,7 +237,7 @@ netfs_get_dirents (struct iouser * cred, struct node * dir,
   if (dir->nn->ln->dir)
     {
       err = get_dirents (dir->nn->ln, first_entry, max_entries,
-			 data, data_len, max_entries, data_entries);
+			 data, data_len, max_data_len, data_entries);
     }
   else
     err = ENOTDIR;
@@ -253,7 +255,7 @@ netfs_get_dirents (struct iouser * cred, struct node * dir,
    what.) */
 error_t
 netfs_attempt_lookup (struct iouser * user, struct node * dir,
-		      char *name, struct node ** node)
+		      const char *name, struct node ** node)
 {
   error_t err = 0;
   struct pcifs_dirent *entry;
@@ -349,7 +351,7 @@ netfs_attempt_lookup (struct iouser * user, struct node * dir,
 
 /* Delete NAME in DIR for USER. */
 error_t
-netfs_attempt_unlink (struct iouser * user, struct node * dir, char *name)
+netfs_attempt_unlink (struct iouser * user, struct node * dir, const char *name)
 {
   return EOPNOTSUPP;
 }
@@ -357,8 +359,8 @@ netfs_attempt_unlink (struct iouser * user, struct node * dir, char *name)
 /* Note that in this one call, neither of the specific nodes are locked. */
 error_t
 netfs_attempt_rename (struct iouser * user, struct node * fromdir,
-		      char *fromname, struct node * todir,
-		      char *toname, int excl)
+		      const char *fromname, struct node * todir,
+		      const char *toname, int excl)
 {
   return EOPNOTSUPP;
 }
@@ -367,14 +369,14 @@ netfs_attempt_rename (struct iouser * user, struct node * fromdir,
    MODE.  */
 error_t
 netfs_attempt_mkdir (struct iouser * user, struct node * dir,
-		     char *name, mode_t mode)
+		     const char *name, mode_t mode)
 {
   return EOPNOTSUPP;
 }
 
 /* Attempt to remove directory named NAME in DIR for USER. */
 error_t
-netfs_attempt_rmdir (struct iouser * user, struct node * dir, char *name)
+netfs_attempt_rmdir (struct iouser * user, struct node * dir, const char *name)
 {
   return EOPNOTSUPP;
 }
@@ -410,7 +412,7 @@ netfs_attempt_chmod (struct iouser * cred, struct node * node, mode_t mode)
 
 /* Attempt to turn NODE (user CRED) into a symlink with target NAME. */
 error_t
-netfs_attempt_mksymlink (struct iouser * cred, struct node * node, char *name)
+netfs_attempt_mksymlink (struct iouser * cred, struct node * node, const char *name)
 {
   return EOPNOTSUPP;
 }
@@ -466,7 +468,7 @@ netfs_attempt_syncfs (struct iouser * cred, int wait)
    return EEXIST if NAME is already found in DIR.  */
 error_t
 netfs_attempt_link (struct iouser * user, struct node * dir,
-		    struct node * file, char *name, int excl)
+		    struct node * file, const char *name, int excl)
 {
   return EOPNOTSUPP;
 }
@@ -507,7 +509,7 @@ netfs_attempt_read (struct iouser * cred, struct node * node,
     }
   else if (!strncmp (node->nn->ln->name, FILE_ROM_NAME, NAME_SIZE))
     {
-      err = read_rom_file (node->nn->ln->device, offset, len, data);
+      err = read_rom_file (node->nn->ln, offset, len, data);
       if (!err)
 	/* Update atime */
 	UPDATE_TIMES (node->nn->ln, TOUCH_ATIME);
@@ -531,14 +533,14 @@ netfs_attempt_read (struct iouser * cred, struct node * node,
    return. */
 error_t
 netfs_attempt_write (struct iouser * cred, struct node * node,
-		     off_t offset, size_t * len, void *data)
+		     off_t offset, size_t * len, const void *data)
 {
   error_t err;
 
   if (!strncmp (node->nn->ln->name, FILE_CONFIG_NAME, NAME_SIZE))
     {
       err =
-        io_config_file (node->nn->ln->device, offset, len, data,
+        io_config_file (node->nn->ln->device, offset, len, (void*) data,
                        (pci_io_op_t) pci_device_cfg_write);
       if (!err)
         {
@@ -549,7 +551,7 @@ netfs_attempt_write (struct iouser * cred, struct node * node,
   else if (!strncmp
 	   (node->nn->ln->name, FILE_REGION_NAME, strlen (FILE_REGION_NAME)))
     {
-      err = io_region_file (node->nn->ln, offset, len, data, 0);
+      err = io_region_file (node->nn->ln, offset, len, (void*) data, 0);
       if (!err)
 	/* Update atime */
 	UPDATE_TIMES (node->nn->ln, TOUCH_MTIME | TOUCH_CTIME);
@@ -565,4 +567,96 @@ void
 netfs_node_norefs (struct node *node)
 {
   destroy_node (node);
+}
+
+static mach_port_t
+get_filemap_region (struct node *node, vm_prot_t prot)
+{
+  error_t err;
+  memory_object_t proxy;
+  vm_prot_t max_prot;
+  size_t reg_num;
+  struct pci_mem_region *region;
+  size_t rounded_size;
+
+  /* Get region info */
+  reg_num =
+    strtol (&node->nn->ln->name[strlen (node->nn->ln->name) - 1], 0, 16);
+  region = &node->nn->ln->device->regions[reg_num];
+
+  if (region->is_IO)
+    goto error;
+
+  /* Ensure the region is mapped */
+  err = device_map_region (node->nn->ln->device, region,
+			   &node->nn->ln->region_maps[reg_num]);
+  if (err)
+    goto error;
+
+  /* WARNING: this rounds up the proxied region to a whole page.
+   * This may be a security risk, but is the only way to provide access
+   * to the final page of the memory region */
+  rounded_size = round_page (region->size);
+
+  /* Create a new memory object proxy with the required protection */
+  max_prot = (VM_PROT_READ | VM_PROT_WRITE) & prot;
+  err =
+    vm_region_create_proxy (mach_task_self (),
+			    (vm_address_t) node->nn->ln->region_maps[reg_num],
+			    max_prot, rounded_size, &proxy);
+  if (err)
+    goto error;
+
+  return proxy;
+
+error:
+  errno = EOPNOTSUPP;
+  return MACH_PORT_NULL;
+}
+
+static mach_port_t
+get_filemap_rom (struct node *node, vm_prot_t prot)
+{
+  error_t err;
+  memory_object_t proxy;
+  vm_prot_t max_prot;
+
+  /* Ensure the rom is mapped */
+  err = device_map_rom (node->nn->ln->device, &node->nn->ln->rom_map);
+  if (err)
+    goto error;
+
+  /* Create a new memory object proxy with the required protection */
+  max_prot = (VM_PROT_READ) & prot;
+  err =
+    vm_region_create_proxy (mach_task_self (),
+			    (vm_address_t) node->nn->ln->rom_map,
+			    max_prot, node->nn->ln->device->rom_size, &proxy);
+  if (err)
+    goto error;
+
+  return proxy;
+
+error:
+  errno = EOPNOTSUPP;
+  return MACH_PORT_NULL;
+}
+
+mach_port_t
+netfs_get_filemap (struct node *node, vm_prot_t prot)
+{
+  /* Only region and rom files can be mapped */
+  if (!strncmp
+      (node->nn->ln->name, FILE_REGION_NAME, strlen (FILE_REGION_NAME)))
+    {
+      return get_filemap_region (node, prot);
+    }
+
+  if (!strncmp (node->nn->ln->name, FILE_ROM_NAME, strlen (FILE_ROM_NAME)))
+    {
+      return get_filemap_rom (node, prot);
+    }
+
+  errno = EOPNOTSUPP;
+  return MACH_PORT_NULL;
 }

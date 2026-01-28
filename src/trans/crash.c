@@ -149,7 +149,7 @@ template_make_file_name (const char *template,
 	      break;
 
 	    case 't':
-	      fprintf (stream, "%d", time (NULL));
+	      fprintf (stream, "%lld", (long long) time (NULL));
 	      break;
 
 	    default:
@@ -213,7 +213,7 @@ stop_pgrp (process_t userproc, mach_port_t cttyid)
   pid_t pid, ppid, pgrp;
   int orphaned;
   error_t err;
-  size_t numpids = 20;
+  mach_msg_type_number_t numpids = 20;
   pid_t pids_[numpids], *pids = pids_;
   int i;
 
@@ -249,7 +249,7 @@ S_crash_dump_task (mach_port_t port,
 		   mach_port_t reply_port, mach_msg_type_name_t reply_type,
 		   task_t task, file_t core_file,
 		   int signo, integer_t sigcode, int sigerror,
-		   natural_t exc, natural_t code, natural_t subcode,
+		   natural_t exc, natural_t code, long_natural_t subcode,
 		   mach_port_t ctty_id)
 {
   error_t err;
@@ -646,7 +646,7 @@ parse_opt (int opt, char *arg, struct argp_state *state)
     case 'c': crash_how = crash_corefile;	break;
     case 'C':
       {
-	char *errp;
+	const char *errp;
 	if (! template_valid (arg, &errp))
 	  {
 	    argp_error (state, "Invalid template: ...'%s'", errp);
@@ -856,9 +856,9 @@ S_msg_add_auth (mach_port_t process,
 kern_return_t
 S_msg_del_auth (mach_port_t process,
 		mach_port_t task,
-		intarray_t uids,
+		const_intarray_t uids,
 		mach_msg_type_number_t uidsCnt,
-		intarray_t gids,
+		const_intarray_t gids,
 		mach_msg_type_number_t gidsCnt)
 { return EBUSY; }
 
@@ -888,7 +888,7 @@ S_msg_get_init_ports (mach_port_t process,
 kern_return_t
 S_msg_set_init_ports (mach_port_t process,
 		      mach_port_t refport,
-		      portarray_t ports,
+		      const_portarray_t ports,
 		      mach_msg_type_number_t portsCnt)
 { return EBUSY; }
 
@@ -916,7 +916,7 @@ S_msg_get_init_ints (mach_port_t process,
 kern_return_t
 S_msg_set_init_ints (mach_port_t process,
 		     mach_port_t refport,
-		     intarray_t values,
+		     const_intarray_t values,
 		     mach_msg_type_number_t valuesCnt)
 { return EBUSY; }
 
@@ -931,7 +931,7 @@ S_msg_get_dtable (mach_port_t process,
 kern_return_t
 S_msg_set_dtable (mach_port_t process,
 		  mach_port_t refport,
-		  portarray_t dtable,
+		  const_portarray_t dtable,
 		  mach_msg_type_number_t dtableCnt)
 { return EBUSY; }
 
@@ -959,13 +959,13 @@ S_msg_get_environment (mach_port_t process,
 kern_return_t
 S_msg_set_environment (mach_port_t process,
 		       mach_port_t refport,
-		       data_t value,
+		       const_data_t value,
 		       mach_msg_type_number_t valueCnt)
 { return EBUSY; }
 
 kern_return_t
 S_msg_get_env_variable (mach_port_t process,
-			string_t variable,
+			const_string_t variable,
 			data_t *value,
 			mach_msg_type_number_t *valueCnt)
 { return EBUSY; }
@@ -973,8 +973,8 @@ S_msg_get_env_variable (mach_port_t process,
 kern_return_t
 S_msg_set_env_variable (mach_port_t process,
 			mach_port_t refport,
-			string_t variable,
-			string_t value,
+			const_string_t variable,
+			const_string_t value,
 			boolean_t replace)
 { return EBUSY; }
 kern_return_t
@@ -990,12 +990,12 @@ kern_return_t
 S_msg_clear_some_exec_flags (mach_port_t process, mach_port_t refport,
 			     int flags)
 { return EBUSY; }
-error_t
+kern_return_t
 S_msg_report_wait (mach_port_t process, thread_t thread,
 		   string_t desc, mach_msg_id_t *rpc)
 { return EBUSY; }
-error_t
+kern_return_t
 S_msg_describe_ports (mach_port_t msgport, mach_port_t refport,
-		      mach_port_t *ports, mach_msg_type_number_t nports,
+		      const mach_port_t *ports, mach_msg_type_number_t nports,
 		      data_t *desc, mach_msg_type_number_t *desclen)
 { return EBUSY; }

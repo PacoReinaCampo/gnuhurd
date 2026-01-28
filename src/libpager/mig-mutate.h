@@ -1,4 +1,5 @@
-/*
+/* MIG type translation information
+
    Copyright (C) 2014 Free Software Foundation, Inc.
    Written by Justus Winter.
 

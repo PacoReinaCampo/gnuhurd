@@ -26,12 +26,13 @@ include ./Makeconf
 ## Subdirectories of this directory should all be mentioned here
 
 # Hurd libraries
-lib-subdirs = libshouldbeinlibc libihash libiohelp libports libthreads \
+lib-subdirs = libshouldbeinlibc libihash libiohelp libports \
 	      libpager libfshelp libdiskfs libtrivfs libps \
 	      libnetfs libpipe libstore libhurdbugaddr libftpconn libcons \
 	      libhurd-slab \
 	      libbpf \
 	      libmachdev \
+	      libirqhelp \
 
 # Hurd programs
 prog-subdirs = auth proc exec term \
@@ -46,11 +47,11 @@ prog-subdirs = auth proc exec term \
 	       init \
 	       devnode \
 	       eth-multiplexer \
-	       acpi \
-	       shutdown
+	       shutdown \
+	       rtc
 
 ifeq ($(HAVE_LIBRUMP),yes)
-prog-subdirs += rumpdisk
+prog-subdirs += rumpdisk rumpnet
 endif
 
 ifeq ($(HAVE_SUN_RPC),yes)
@@ -63,6 +64,10 @@ endif
 
 ifeq ($(HAVE_LIBPCIACCESS),yes)
 prog-subdirs += pci-arbiter
+endif
+
+ifeq ($(HAVE_LIBACPICA),yes)
+prog-subdirs += acpi
 endif
 
 # Other directories
@@ -96,7 +101,7 @@ ifdef configured
 dist: $(foreach Z,xz gz,$(dist-version).tar.$(Z))
 else
 dist:
-	@echo >&2 'Cannot build a distribution from an unconfigured.vcd --wave=system.ghw --stop-time=1ms.'
+	@echo >&2 'Cannot build a distribution from an unconfigured tree.'
 	false
 endif
 
@@ -207,7 +212,7 @@ gen-ChangeLog:
 	  done &&							\
 	  rm -f random/ChangeLog_ &&					\
 	  (cd $(top_srcdir)/ &&						\
-	  git ls.vcd --wave=system.ghw --stop-time=1ms --name-only					\
+	  git ls-tree --name-only					\
 	    ac38884dc9ad32a11d09f55ba9fe399cd0a48e2f) >> random/ChangeLog_ && \
 	  rm -f random/ChangeLog-2 &&					\
 	  perl \

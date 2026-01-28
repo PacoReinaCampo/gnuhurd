@@ -91,6 +91,8 @@ timer_function (void *this_is_a_pointless_variable_with_a_rather_long_name)
   mach_port_t recv = mach_reply_port ();
   int wait = 0;
 
+  pthread_setname_np (pthread_self (), "timer");
+
   timer_thread = mach_thread_self ();
 
   pthread_mutex_lock (&timer_lock);

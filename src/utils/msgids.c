@@ -109,11 +109,18 @@ msgid_info (mach_msg_id_t msgid)
 	  struct msgid_info *reply_info = malloc (sizeof *info);
 	  if (reply_info != 0)
 	    {
+	      int err;
 	      reply_info->subsystem = strdup (info->subsystem);
 	      reply_info->name = 0;
-	      asprintf (&reply_info->name, "%s-reply", info->name);
-	      hurd_ihash_add (&msgid_ihash, msgid, reply_info);
-	      info = reply_info;
+	      err = asprintf (&reply_info->name, "%s-reply", info->name);
+	      if (err == -1)
+		/* asprintf may fail with ENOMEM, react the same way to malloc failing */
+		info = 0;
+	      else
+		{
+		  hurd_ihash_add (&msgid_ihash, msgid, reply_info);
+		  info = reply_info;
+		}
 	    }
 	  else
 	    info = 0;
@@ -171,6 +178,39 @@ static bool nostdinc = FALSE;
 #define STD_MSGIDS_DIR DATADIR "/msgids/"
 #define OPT_NOSTDINC -1
 
+error_t
+msgids_scan_std (void)
+{
+  error_t err = 0;
+
+  /* Insert the files from STD_MSGIDS_DIR at the beginning of the
+     list, so that their content can be overridden by subsequently
+     parsed files.  */
+  if (nostdinc == FALSE)
+    scan_msgids_dir (&msgids_files_argz, &msgids_files_argz_len,
+		     STD_MSGIDS_DIR, FALSE);
+
+  if (msgids_files_argz != NULL)
+    {
+      char *msgids_file = NULL;
+
+      while (! err
+	     && (msgids_file = argz_next (msgids_files_argz,
+					  msgids_files_argz_len,
+					  msgids_file)))
+	{
+	  err = parse_msgid_list (msgids_file);
+	  if (err)
+	    error (0, err, "%s", msgids_file);
+	}
+
+      free (msgids_files_argz);
+      msgids_files_argz = NULL;
+    }
+
+  return err;
+}
+
 static const struct argp_option options[] =
 {
   {"nostdinc", OPT_NOSTDINC, 0, 0,
@@ -218,29 +258,13 @@ static error_t parse_opt (int key, char *arg, struct argp_state *state)
       return EINVAL;
 
     case ARGP_KEY_END:
-      /* Insert the files from STD_MSGIDS_DIR at the beginning of the
-	 list, so that their content can be overridden by subsequently
-	 parsed files.  */
-      if (nostdinc == FALSE)
-	scan_msgids_dir (&msgids_files_argz, &msgids_files_argz_len,
-			 STD_MSGIDS_DIR, FALSE);
+      {
+	error_t err = msgids_scan_std ();
 
-      if (msgids_files_argz != NULL)
-	{
-	  error_t err = 0;
-	  char *msgids_file = NULL;
-
-	  while (! err
-		 && (msgids_file = argz_next (msgids_files_argz,
-					      msgids_files_argz_len,
-					      msgids_file)))
-	    err = parse_msgid_list (msgids_file);
-
-	  free (msgids_files_argz);
-	  if (err)
-	    argp_failure (state, 1, err, "%s", msgids_file);
-	}
-      break;
+	if (err)
+	  argp_failure (state, 1, err, "parsing msgid files");
+	break;
+      }
 
     default:
       return ARGP_ERR_UNKNOWN;

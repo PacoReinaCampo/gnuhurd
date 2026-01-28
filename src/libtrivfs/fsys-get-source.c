@@ -26,11 +26,11 @@
    appropriate in the context of the translator.  For example, if the
    translator is a filesystem residing on a block device, then SOURCE
    should be the file name of the underlying block device.  */
-error_t
+kern_return_t
 trivfs_S_fsys_get_source (struct trivfs_control *fsys,
 			  mach_port_t reply,
 			  mach_msg_type_name_t replyPoly,
-			  char *source)
+			  string_t source)
 {
   return fsys ? trivfs_get_source (source, 1024 /* XXX */) : EOPNOTSUPP;
 }

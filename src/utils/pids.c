@@ -33,7 +33,7 @@ static process_t _proc_server = MACH_PORT_NULL;
 
 /* Return this process's proc server. */
 static inline process_t
-proc_server ()
+proc_server (void)
 {
   if (_proc_server == MACH_PORT_NULL)
     _proc_server = getproc ();
@@ -43,11 +43,12 @@ proc_server ()
 /* Add the pids returned in vm_allocated memory by calling PIDS_FN with ID as
    an argument to PIDS and NUM_PIDS, reallocating it in malloced memory.  */
 error_t
-add_fn_pids (pid_t **pids, size_t *num_pids, unsigned id,
+add_fn_pids (pid_t **pids, mach_msg_type_number_t *num_pids, unsigned id,
 	     error_t (*pids_fn)(process_t proc, pid_t id,
-				pid_t **pids, size_t *num_pids))
+				pid_t **pids,
+				mach_msg_type_number_t *num_pids))
 {
-  size_t num_new_pids = 25;
+  mach_msg_type_number_t num_new_pids = 25;
   pid_t _new_pids[num_new_pids], *new_pids = _new_pids;
   error_t err = (*pids_fn)(proc_server (), id, &new_pids, &num_new_pids);
 
@@ -57,7 +58,7 @@ add_fn_pids (pid_t **pids, size_t *num_pids, unsigned id,
       pid_t *new = realloc (*pids, new_sz * sizeof (pid_t));
       if (new)
 	{
-	  bcopy (new_pids, new + (*num_pids * sizeof (pid_t)),
+	  bcopy (new_pids, new + *num_pids,
 		 num_new_pids * sizeof (pid_t));
 	  *pids = new;
 	  *num_pids = new_sz;
@@ -73,7 +74,7 @@ add_fn_pids (pid_t **pids, size_t *num_pids, unsigned id,
 
 /* Add PID to PIDS and NUM_PIDS, reallocating it in malloced memory.  */
 error_t
-add_pid (pid_t **pids, size_t *num_pids, pid_t pid)
+add_pid (pid_t **pids, mach_msg_type_number_t *num_pids, pid_t pid)
 {
   size_t new_sz = *num_pids + 1;
   pid_t *new = realloc (*pids, new_sz * sizeof (pid_t));

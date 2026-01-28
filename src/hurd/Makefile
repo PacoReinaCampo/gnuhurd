@@ -20,7 +20,7 @@ makemode := misc
 hdrs = $(wildcard $(srcdir)/*.defs $(srcdir)/*.h)
 
 INSTHDRS = hurd_types.h version.h ioctl_types.h paths.h shared.h console.h \
-	$(notdir $(wildcard $(srcdir)/*.defs))
+	rtc.h $(notdir $(wildcard $(srcdir)/*.defs))
 MSGIDS := hurd.msgids $(patsubst %.defs,%.msgids,$(filter %.defs,$(INSTHDRS)))
 
 include ../Makeconf

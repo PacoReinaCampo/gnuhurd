@@ -47,8 +47,8 @@ static char state_char (struct proc_stat *ps)
 {
   int i;
 
-  for (i = 0; (1 << i) & (PSTAT_STATE_P_STATES | PSTAT_STATE_T_STATES); i++)
-    if (proc_stat_state (ps) & (1 << i))
+  for (i = 0; (1U << i) & (PSTAT_STATE_P_STATES | PSTAT_STATE_T_STATES); i++)
+    if (proc_stat_state (ps) & (1U << i))
       return proc_stat_state_tags[i];
 
   return '?';
@@ -69,7 +69,7 @@ static const char *state_string (struct proc_stat *ps)
   int i;
 
   for (i = 0; state_strings[i]; i++)
-    if (proc_stat_state (ps) & (1 << i))
+    if (proc_stat_state (ps) & (1U << i))
       return state_strings[i];
 
   return "? (unknown)";
@@ -162,17 +162,17 @@ process_file_gc_maps (struct proc_stat *ps, char **contents)
       if (err)
 	break;
 
-      fprintf (s, "%0*lx-%0*lx %c%c%c%c %0*lx %s %d ",
+      fprintf (s, "%0*zx-%0*zx %c%c%c%c %0*zx %s %d ",
 	       /* Address range.  */
-	       2*sizeof s, addr,
-	       2*sizeof s, addr + size,
+	       (int) (2 * sizeof s), addr,
+	       (int) (2 * sizeof s), addr + size,
 	       /* Permissions.	*/
 	       prot & VM_PROT_READ? 'r': '-',
 	       prot & VM_PROT_WRITE? 'w': '-',
 	       prot & VM_PROT_EXECUTE? 'x': '-',
 	       shared? 's': 'p',
 	       /* Offset.  */
-	       2*sizeof s, offs,
+	       (int) (2 * sizeof s), offs,
 	       /* Device.  */
 	       "00:00",
 	       /* Inode.  */
@@ -191,7 +191,7 @@ process_file_gc_maps (struct proc_stat *ps, char **contents)
 	  else
 	    mach_port_deallocate (mach_task_self (), obj);
 
-	  fprintf (s, "[mem_obj=%lu]\n", obj);
+	  fprintf (s, "[mem_obj=%u]\n", obj);
 	}
       else
 	fprintf (s, "\n");
@@ -266,7 +266,7 @@ process_file_gc_stat (struct proc_stat *ps, char **contents)
       "%d %ld "			/* number of threads, [obsolete] */
       "%llu "			/* start time since boot (jiffies) */
       "%lu %ld %lu "		/* virtual size (bytes), rss (pages), rss lim */
-      "%lu %lu %lu %lu %lu "	/* some vm addresses (code, stack, sp, pc) */
+      "%zu %zu %lu %lu %lu "	/* some vm addresses (code, stack, sp, pc) */
       "%lu %lu %lu %lu "	/* pending, blocked, ignored and caught sigs */
       "%lu "			/* wait channel */
       "%lu %lu "		/* swap usage (not maintained in Linux) */
@@ -286,7 +286,7 @@ process_file_gc_stat (struct proc_stat *ps, char **contents)
       MACH_PRIORITY_TO_NICE(thbi->base_priority) + 20,
       MACH_PRIORITY_TO_NICE(thbi->base_priority),
       pi->nthreads, 0L,
-      timeval_jiffies (thbi->creation_time), /* FIXME: ... since boot */
+      timeval_jiffies (tbi->creation_time), /* FIXME: ... since boot */
       (long unsigned) tbi->virtual_size,
       (long unsigned) tbi->resident_size / PAGE_SIZE, 0L,
       start_code,
@@ -325,10 +325,10 @@ process_file_gc_status (struct proc_stat *ps, char **contents)
       "Pid:\t%u\n"
       "PPid:\t%u\n"
       "Uid:\t%u\t%u\t%u\t%u\n"
-      "VmSize:\t%8u kB\n"
-      "VmPeak:\t%8u kB\n"
-      "VmRSS:\t%8u kB\n"
-      "VmHWM:\t%8u kB\n" /* ie. resident peak */
+      "VmSize:\t%8zu kB\n"
+      "VmPeak:\t%8zu kB\n"
+      "VmRSS:\t%8zu kB\n"
+      "VmHWM:\t%8zu kB\n" /* ie. resident peak */
       "Threads:\t%u\n",
       args_filename_length (fn), fn,
       state_string (ps),

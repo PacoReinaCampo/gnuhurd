@@ -61,7 +61,7 @@ static const struct argp_option argp_opts[] =
   {"update", 'u', 0, 0, "Flush any meta-data cached in core"},
   {"remount", 0, 0, OPTION_ALIAS},
   {"verbose", 'v', 0, 0, "Give more detailed information"},
-  {"no-mtab", 'n', 0, 0, "Do not update /etc/mtab"},
+  {"no-mtab", 'n', 0, 0, "Do not update " _PATH_MOUNTED},
   {"test-opts", 'O', "OPTIONS", 0,
    "Only mount fstab entries matching the given set of options"},
   {"bind", 'B', 0, 0, "Bind mount, firmlink"},
@@ -255,20 +255,32 @@ do_mount (struct fs *fs, int remount)
 
       /* Remove the `noauto' and `bind' options, since they're for us not the
          filesystem.  */
-      for (o = mntopts; o; o = argz_next (mntopts, mntopts_len, o))
+      for (o = mntopts; o; )
         {
           if (strcmp (o, MNTOPT_NOAUTO) == 0)
-            argz_delete (&mntopts, &mntopts_len, o);
+	    {
+	      argz_delete (&mntopts, &mntopts_len, o);
+	      if (!mntopts || o >= mntopts + mntopts_len)
+		break;
+	      continue;
+	    }
           if (strcmp (o, "bind") == 0)
             {
               fs->mntent.mnt_type = strdup ("firmlink");
               if (!fs->mntent.mnt_type)
                 error (3, ENOMEM, "failed to allocate memory");
               argz_delete (&mntopts, &mntopts_len, o);
+	      if (!mntopts || o >= mntopts + mntopts_len)
+		break;
+	      continue;
             }
+	  o = argz_next (mntopts, mntopts_len, o);
         }
 
-      ARGZ (append (&mntopts, &mntopts_len, options, options_len));
+      if (options_len)
+	{
+	  ARGZ (append (&mntopts, &mntopts_len, options, options_len));
+	}
     }
   else
     {
@@ -404,7 +416,7 @@ do_mount (struct fs *fs, int remount)
 
       if (fake) {
         /* Fake the translator startup. */
-        mach_port_t underlying;
+        mach_port_t underlying = MACH_PORT_NULL;
         mach_msg_type_name_t underlying_type;
         err = open_node (O_READ, &underlying, &underlying_type, 0, NULL);
         if (err)
@@ -481,7 +493,7 @@ do_query (struct fs *fs)
   error_t err;
   fsys_t fsys;
   char _opts[200], *opts = _opts;
-  size_t opts_len = sizeof opts;
+  mach_msg_type_number_t opts_len = sizeof opts;
   size_t nopts;
 
   err = fs_fsys (fs, &fsys);
@@ -574,8 +586,11 @@ do_query (struct fs *fs)
 	  opts_len -= strlen (device) + 1;
 	  if (!strncmp (type_opt, argv[nopts - 1], sizeof type_opt - 1))
 	    {
-	      asprintf ((char **) &device, "%s:%s",
-			&argv[nopts - 1][sizeof type_opt - 1], device);
+	      err = asprintf ((char **) &device, "%s:%s",
+			      &argv[nopts - 1][sizeof type_opt - 1], device);
+	      if (err == -1)
+		error (1, errno, "asprintf failed");
+
 	      opts_len -= strlen (argv[nopts - 1]) + 1;
 	    }
 	}

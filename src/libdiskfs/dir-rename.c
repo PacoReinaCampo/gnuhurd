@@ -29,9 +29,9 @@ static pthread_mutex_t renamedirlock = PTHREAD_MUTEX_INITIALIZER;
 /* Implement dir_rename as described in <hurd/fs.defs>. */
 kern_return_t
 diskfs_S_dir_rename (struct protid *fromcred,
-		     char *fromname,
+		     const_string_t fromname,
 		     struct protid *tocred,
-		     char *toname,
+		     const_string_t toname,
 		     int excl)
 {
   struct node *fdp, *tdp, *fnp, *tnp, *tmpnp;
@@ -107,6 +107,10 @@ diskfs_S_dir_rename (struct protid *fromcred,
   pthread_mutex_unlock (&fnp->lock);
 
   /* We now hold no locks */
+
+  if (toname[strlen (toname) - 1] == '/')
+    /* Source must be directory.  */
+    return ENOTDIR;
 
   /* Link the node into the new directory. */
   pthread_mutex_lock (&tdp->lock);

@@ -155,6 +155,10 @@ pager_change_attributes (struct pager *pager,
 mach_port_t
 pager_get_port (struct pager *pager);
 
+/* Create a read-only proxy for requests to the pager.  */
+mach_port_t
+pager_create_ro_port (struct pager *pager);
+
 /* Force termination of a pager.  After this returns, no
    more paging requests on the pager will be honored, and the
    pager will be deallocated.  (The actual deallocation might
@@ -191,13 +195,23 @@ pager_read_page (struct user_pager_info *pager,
 		 int *write_lock);
 
 /* The user must define this function.  For pager PAGER, synchronously
-   write one page from BUF to offset PAGE.  In addition, mfree
-   (or equivalent) BUF.  The only permissible error returns are EIO,
-   EDQUOT, and ENOSPC. */
+   write one page from BUF to offset PAGE.  Do not deallocate BUF, and do
+   not keep any references to BUF.  The only permissible error returns
+   are EIO, EDQUOT, and ENOSPC. */
 error_t
 pager_write_page (struct user_pager_info *pager,
 		  vm_offset_t page,
 		  vm_address_t buf);
+
+/* The user may define this function.  For pager PAGER, synchronously
+   write potentially multiple pages from DATA to offset.
+   Do not deallocate DATA, and do not keep any references to DATA.
+   The only permissible error returns are EIO, EDQUOT, EOPNOTSUPP, and ENOSPC. */
+error_t pager_write_pages(struct user_pager_info *upi,
+                          vm_offset_t offset,
+                          vm_address_t data,
+                          vm_size_t length,
+                          vm_size_t *written);
 
 /* The user must define this function.  A page should be made writable. */
 error_t

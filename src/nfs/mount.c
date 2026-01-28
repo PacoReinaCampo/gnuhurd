@@ -18,12 +18,11 @@
    along with this program; if not, write to the Free Software
    Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111, USA. */
 
-#define malloc a_byte_for_every_bozotic_sun_lossage_and_youd_need_a_lotta_ram
 #include <rpc/types.h>
+#include <rpc/xdr.h>
+#include <rpc/pmap_prot.h>
 #undef TRUE			/* Get rid of sun defs.  */
 #undef FALSE
-#undef malloc
-#include <rpc/pmap_prot.h>
 #include <errno.h>
 #include <error.h>
 #include <sys/socket.h>
@@ -103,6 +102,7 @@ mount_root (char *name, char *host)
   void *rpcbuf;
   int port;
   error_t err;
+  struct fhandle mount_fhandle;
   struct node *np;
   short pmapport;
 
@@ -111,13 +111,7 @@ mount_root (char *name, char *host)
     {
       struct servent *s;
 
-      /* XXX This will always fail! pmap_service_name will always be "sunrpc"
-         What should pmap_service_name really be?  By definition the second
-	 argument is either "tcp" or "udp"  Thus, is this backwards
-	 (as service_name suggests)?  If so, should it read:
-             s = getservbyname (pmap_service_name, "udp");
-         or is there something I am missing here?  */
-      s = getservbyname ("sunrpc", pmap_service_name);
+      s = getservbyname (pmap_service_name, "udp");
       if (s)
 	pmapport = s->s_port;
       else
@@ -213,10 +207,9 @@ mount_root (char *name, char *host)
       goto error_with_rpcbuf;
     }
 
-  /* Create the node for root */
-  xdr_decode_fhandle (p, &np);
+  mount_fhandle.size = NFS2_FHSIZE;
+  memcpy(&mount_fhandle.data, p, mount_fhandle.size);
   free (rpcbuf);
-  pthread_mutex_unlock (&np->lock);
 
   if (nfs_port_override)
     port = nfs_port;
@@ -237,8 +230,8 @@ mount_root (char *name, char *host)
 	  error (0, errno, "rpc");
 	  goto error_with_rpcbuf;
 	}
-      *(p++) = htonl (NFS_PROGRAM);
-      *(p++) = htonl (NFS_VERSION);
+      *(p++) = htonl (nfs_program);
+      *(p++) = htonl (nfs_version);
       *(p++) = htonl (IPPROTO_UDP);
       *(p++) = htonl (0);
       err = conduct_rpc (&rpcbuf, &p);
@@ -268,7 +261,47 @@ mount_root (char *name, char *host)
   mounted_hostname = host;
   mounted_nfs_port = port;
 
-  return np;
+  /* The handle returned by the mount server is always NFS2_FHSIZE.
+     The handle on NFSv3 can be larger. An NFS server lookup for
+     the root node succeeds with the handle from the mount server
+     but a longer handle is returned as the true identity. This is
+     the one that must be maintained by the root node.
+     So refetch it here... */
+  p = initialize_rpc(nfs_program,
+		     nfs_version,
+		     NFSPROC_LOOKUP (protocol_version),
+		     0, &rpcbuf,
+		     0, 0, -1);
+  if (! p)
+    {
+      error (0, errno, "rpc");
+      goto error_with_rpcbuf;
+    }
+
+  p = xdr_encode_fhandle(p, &mount_fhandle);
+  p = xdr_encode_string (p, ".");
+
+  err = conduct_rpc (&rpcbuf, &p);
+
+  if (!err) {
+      err = nfs_error_trans (ntohl (*p));
+      p++;
+  }
+  else
+    {
+      error (0, errno, "rpc");
+      goto error_with_rpcbuf;
+    }
+
+  if (!err)
+    {
+      /* Create the node for root */
+      xdr_decode_fhandle (p, &np);
+      pthread_mutex_unlock (&np->lock);
+      free(rpcbuf);
+
+      return np;
+    }
 
 error_with_rpcbuf:
   free (rpcbuf);

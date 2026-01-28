@@ -45,18 +45,24 @@ void __assert_perror_fail_backtrace (int errnum,
   __attribute__ ((noreturn, unused));
 
 #define assert_backtrace(expr)						\
-  ((expr)								\
+  (__builtin_expect(!!(expr), 1)					\
    ? (void) 0								\
    : __assert_fail_backtrace (__STRING(expr),				\
 			      __FILE__, __LINE__,			\
 			      __PRETTY_FUNCTION__))
 
 #define assert_perror_backtrace(expr)					\
-  ((expr == 0)								\
+  (__builtin_expect(((expr) == 0), 1)					\
    ? (void) 0								\
-   : __assert_perror_fail_backtrace (expr,				\
+   : __assert_perror_fail_backtrace ((expr),				\
 				     __FILE__, __LINE__,		\
 				     __PRETTY_FUNCTION__))
+
+/* Print a stack trace on stderr.  */
+void backtrace_stderr (void);
+
+/* Print a stack trace on the mach console.  */
+void backtrace_mach (void);
 
 #endif /* NDEBUG */
 #endif /* __ASSERT_BACKTRACE__ */

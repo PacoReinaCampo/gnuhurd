@@ -23,7 +23,9 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <argp.h>
+#include <argz.h>
 #include <error.h>
+#include <sys/sysmacros.h>
 
 #include <mach.h>
 #include <device/device.h>
@@ -143,7 +145,7 @@ buffer_read (struct buffer *b, void *data, size_t len)
 
 /* Write LEN bytes from DATA to B, returning the amount actually written.  */
 static inline size_t
-buffer_write (struct buffer *b, void *data, size_t len)
+buffer_write (struct buffer *b, const void *data, size_t len)
 {
   size_t size = buffer_writable (b);
 
@@ -182,12 +184,14 @@ error_t dev_readable (size_t *amount);
    in AMOUNT. If NOWAIT is non-zero and the buffer is full, then returns
    EWOULDBLOCK. If an error occurs, the error code is returned,
    otherwise 0.  */
-error_t dev_write (void *buf, size_t len, size_t *amount, int nowait);
+error_t dev_write (const void *buf, size_t len, size_t *amount, int nowait);
 
 /* Try and write out any pending writes to the device. If WAIT is non-zero,
    will wait for any activity to cease.  */
 error_t dev_sync (int wait);
 
+static error_t start_input (int nowait);
+static error_t start_output (int nowait);
 
 
 static struct argp_option options[] =
@@ -478,13 +482,14 @@ trivfs_goaway (struct trivfs_control *fsys, int flags)
 }
 
 
-error_t
+kern_return_t
 trivfs_S_io_read (struct trivfs_protid *cred,
 		  mach_port_t reply, mach_msg_type_name_t reply_type,
 		  data_t *data, mach_msg_type_number_t *data_len,
-		  loff_t offs, mach_msg_type_number_t amount)
+		  off_t offs, vm_size_t amount)
 {
   error_t err;
+  size_t data_size = *data_len;
 
   if (!cred)
     return EOPNOTSUPP;
@@ -493,15 +498,17 @@ trivfs_S_io_read (struct trivfs_protid *cred,
     return EBADF;
 
   pthread_mutex_lock (&global_lock);
-  err = dev_read (amount, (void **)data, data_len, cred->po->openmodes & O_NONBLOCK);
+  err = dev_read (amount, (void **)data, &data_size,
+		  cred->po->openmodes & O_NONBLOCK);
   pthread_mutex_unlock (&global_lock);
+  *data_len = data_size;
   return err;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_readable (struct trivfs_protid *cred,
 		      mach_port_t reply, mach_msg_type_name_t reply_type,
-		      mach_msg_type_number_t *amount)
+		      vm_size_t *amount)
 {
   error_t err;
 
@@ -517,11 +524,11 @@ trivfs_S_io_readable (struct trivfs_protid *cred,
   return err;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_write (struct trivfs_protid *cred,
 		   mach_port_t reply, mach_msg_type_name_t reply_type,
-		   data_t data, mach_msg_type_number_t data_len,
-		   loff_t offs, mach_msg_type_number_t *amount)
+		   const_data_t data, mach_msg_type_number_t data_len,
+		   off_t offs, vm_size_t *amount)
 {
   error_t err;
 
@@ -532,12 +539,12 @@ trivfs_S_io_write (struct trivfs_protid *cred,
     return EBADF;
 
   pthread_mutex_lock (&global_lock);
-  err = dev_write ((void *)data, data_len, amount, cred->po->openmodes & O_NONBLOCK);
+  err = dev_write (data, data_len, amount, cred->po->openmodes & O_NONBLOCK);
   pthread_mutex_unlock (&global_lock);
   return err;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_seek (struct trivfs_protid *cred,
 		  mach_port_t reply, mach_msg_type_name_t reply_type,
 		  off_t offs, int whence, off_t *new_offs)
@@ -567,9 +574,9 @@ io_select_common (struct trivfs_protid *cred,
 
   available = 0;
 
+  pthread_mutex_lock (&global_lock);
   while (1)
     {
-      pthread_mutex_lock (&global_lock);
       if ((*type & SELECT_READ) && buffer_readable (input_buffer))
 	available |= SELECT_READ;
       if ((*type & SELECT_WRITE) &&
@@ -584,10 +591,25 @@ io_select_common (struct trivfs_protid *cred,
 	  return 0;
 	}
 
-      if (cred->po->openmodes & O_NONBLOCK)
+      if (*type & SELECT_READ)
 	{
-	  pthread_mutex_unlock (&global_lock);
-	  return EWOULDBLOCK;
+	  err = start_input(1);
+	  if (err)
+	    {
+	      *type = 0;
+	      pthread_mutex_unlock (&global_lock);
+	      return err;
+	    }
+	}
+      if (*type & SELECT_WRITE)
+	{
+	  err = start_output(1);
+	  if (err)
+	    {
+	      *type = 0;
+	      pthread_mutex_unlock (&global_lock);
+	      return err;
+	    }
 	}
 
       ports_interrupt_self_on_port_death (cred, reply);
@@ -605,7 +627,7 @@ io_select_common (struct trivfs_protid *cred,
     }
 }
 
-error_t
+kern_return_t
 trivfs_S_io_select (struct trivfs_protid *cred,
 		    mach_port_t reply, mach_msg_type_name_t reply_type,
 		    int *type)
@@ -613,7 +635,7 @@ trivfs_S_io_select (struct trivfs_protid *cred,
   return io_select_common (cred, reply, reply_type, NULL, type);
 }
 
-error_t
+kern_return_t
 trivfs_S_io_select_timeout (struct trivfs_protid *cred,
 			    mach_port_t reply, mach_msg_type_name_t reply_type,
 			    struct timespec ts,
@@ -622,7 +644,7 @@ trivfs_S_io_select_timeout (struct trivfs_protid *cred,
   return io_select_common (cred, reply, reply_type, &ts, type);
 }
 
-error_t
+kern_return_t
 trivfs_S_file_set_size (struct trivfs_protid *cred,
 			mach_port_t reply, mach_msg_type_name_t reply_type,
 			off_t size)
@@ -637,7 +659,7 @@ trivfs_S_file_set_size (struct trivfs_protid *cred,
     return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_get_openmodes (struct trivfs_protid *cred,
 			   mach_port_t reply, mach_msg_type_name_t reply_type,
 			   int *bits)
@@ -651,7 +673,7 @@ trivfs_S_io_get_openmodes (struct trivfs_protid *cred,
     }
 }
 
-error_t
+kern_return_t
 trivfs_S_io_set_all_openmodes (struct trivfs_protid *cred,
 			       mach_port_t reply,
 			       mach_msg_type_name_t reply_type,
@@ -663,7 +685,7 @@ trivfs_S_io_set_all_openmodes (struct trivfs_protid *cred,
     return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_set_some_openmodes (struct trivfs_protid *cred,
 				mach_port_t reply,
 				mach_msg_type_name_t reply_type,
@@ -675,7 +697,7 @@ trivfs_S_io_set_some_openmodes (struct trivfs_protid *cred,
     return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_clear_some_openmodes (struct trivfs_protid *cred,
 				  mach_port_t reply,
 				  mach_msg_type_name_t reply_type,
@@ -687,7 +709,7 @@ trivfs_S_io_clear_some_openmodes (struct trivfs_protid *cred,
     return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_file_sync (struct trivfs_protid *cred,
 		    mach_port_t reply, mach_msg_type_name_t reply_type,
 		    int wait, int omit_metadata)
@@ -703,7 +725,7 @@ trivfs_S_file_sync (struct trivfs_protid *cred,
   return err;
 }
 
-error_t
+kern_return_t
 trivfs_S_file_syncfs (struct trivfs_protid *cred,
 		      mach_port_t reply, mach_msg_type_name_t reply_type,
 		      int wait, int dochildren)
@@ -717,6 +739,43 @@ trivfs_S_file_syncfs (struct trivfs_protid *cred,
   err = dev_sync (wait);
   pthread_mutex_unlock (&global_lock);
   return err;
+}
+
+error_t
+trivfs_append_args (struct trivfs_control *fsys,
+		    char **argz, size_t *argz_len)
+{
+  error_t err;
+
+  switch (trivfs_allow_open & O_RDWR)
+    {
+    default:
+      assert_backtrace (!"Bad trivfs_allow_open");
+    case O_READ:
+      err = argz_add (argz, argz_len, "--readonly");
+      break;
+    case O_WRITE:
+      err = argz_add (argz, argz_len, "--writeonly");
+      break;
+    case O_RDWR:
+      err = argz_add (argz, argz_len, "--writable");
+      break;
+    }
+
+  if (err)
+    return err;
+
+  if (rdev != (dev_t) 0)
+    {
+      char buf[40];
+      snprintf (buf, sizeof (buf), "--rdev=%d,%d",
+		gnu_dev_major (rdev), gnu_dev_minor (rdev));
+      err = argz_add (argz, argz_len, buf);
+      if (err)
+        return err;
+    }
+
+  return argz_add (argz, argz_len, stream_name);
 }
 
 
@@ -830,7 +889,7 @@ kern_return_t
 device_open_reply (mach_port_t reply, int returncode, mach_port_t device)
 {
   int sizes[DEV_GET_SIZE_COUNT];
-  size_t sizes_len = DEV_GET_SIZE_COUNT;
+  mach_msg_type_number_t sizes_len = DEV_GET_SIZE_COUNT;
   int amount;
 
   if (reply != phys_reply)
@@ -996,9 +1055,9 @@ dev_read (size_t amount, void **buf, size_t *len, int nowait)
   return err;
 }
 
-error_t
-device_read_reply_inband (mach_port_t reply, error_t errorcode,
-			  char *data, u_int datalen)
+kern_return_t
+device_read_reply_inband (mach_port_t reply, kern_return_t errorcode,
+			  const io_buf_ptr_inband_t data, mach_msg_type_number_t datalen)
 {
   if (reply != phys_reply)
     return EOPNOTSUPP;
@@ -1007,9 +1066,11 @@ device_read_reply_inband (mach_port_t reply, error_t errorcode,
 
   input_pending = 0;
   err = errorcode;
+  if (err == D_WOULD_BLOCK)
+    err = 0;
   if (!err)
     {
-      if (datalen == 0)
+      if (datalen == 0 && errorcode != D_WOULD_BLOCK)
 	{
 	  eof = 1;
 	  dev_close ();
@@ -1092,7 +1153,7 @@ start_output (int nowait)
    otherwise 0.  */
 /* Be careful that the global lock is already locked.  */
 error_t
-dev_write (void *buf, size_t len, size_t *amount, int nowait)
+dev_write (const void *buf, size_t len, size_t *amount, int nowait)
 {
   if (err)
     return err;
@@ -1116,8 +1177,8 @@ dev_write (void *buf, size_t len, size_t *amount, int nowait)
   return err;
 }
 
-error_t
-device_write_reply_inband (mach_port_t reply, error_t returncode, int amount)
+kern_return_t
+device_write_reply_inband (mach_port_t reply, kern_return_t returncode, int amount)
 {
   if (reply != phys_reply_writes)
     return EOPNOTSUPP;

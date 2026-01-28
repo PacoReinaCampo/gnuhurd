@@ -101,7 +101,7 @@ ipv4config_is_valid (uint32_t addr, uint32_t netmask,
 
 /* Configure the loopback interface */
 static void
-init_loopback ()
+init_loopback (void)
 {
   struct ifcommon ifc;
 
@@ -114,7 +114,7 @@ init_loopback ()
 
 /* Remove the existing interfaces, but the loopback one */
 void
-remove_ifs ()
+remove_ifs (void)
 {
   struct netif *netif;
 
@@ -149,13 +149,13 @@ init_ifs (void *arg)
   ip6_addr_t *address6;
   int i;
 
-  if (netif_list != 0)
-    {
-      if (netif_list->next == 0)
-	init_loopback ();
-      else
-	remove_ifs ();
-    }
+  if (netif_list == 0)
+    netif_list = calloc (1, sizeof (struct netif));
+
+  if (netif_list->next == 0)
+    init_loopback ();
+  else
+    remove_ifs ();
 
   /*
    * Go through the list backwards. For LwIP
@@ -332,6 +332,19 @@ configure_device (struct netif *netif, uint32_t addr, uint32_t netmask,
 		  uint32_t * addr6, uint8_t * addr6_prefix_len)
 {
   error_t err = 0;
+
+  /*
+   * The caller is trying to set an invalid address,
+   * set all fields to empty so it passes the validation
+   */
+  if (addr == INADDR_ANY || addr == INADDR_NONE)
+    {
+      addr = INADDR_NONE;
+      netmask = INADDR_NONE;
+      peer = INADDR_NONE;
+      broadcast = INADDR_NONE;
+      gateway = INADDR_NONE;
+    }
 
   if (netmask != INADDR_NONE)
     /*

@@ -235,7 +235,13 @@ vcons_lookup (cons_t cons, int id, int create, vcons_t *r_vcons)
   vcons->cons = cons;
   vcons->refcnt = 1;
   vcons->id = id;
-  asprintf (&vcons->name, "%i", id);
+  err = asprintf (&vcons->name, "%i", id);
+  if (err == -1)
+    {
+      free (vcons);
+      pthread_mutex_unlock (&cons->lock);
+      return ENOMEM;
+    }
   /* XXX Error checking.  */
 
   pthread_mutex_init (&vcons->lock, NULL);
@@ -471,7 +477,7 @@ netfs_node_norefs (struct node *np)
    before returning.  */
 error_t
 netfs_attempt_create_file (struct iouser *user, struct node *dir,
-			   char *name, mode_t mode, struct node **np)
+			   const char *name, mode_t mode, struct node **np)
 {
   /* We create virtual consoles dynamically on the fly, so there is no
      need for an explicit create operation.  */
@@ -563,7 +569,7 @@ netfs_attempt_sync (struct iouser *cred, struct node *np, int wait)
    should unlock DIR no matter what.) */
 error_t
 netfs_attempt_lookup (struct iouser *user, struct node *dir,
-		      char *name, struct node **node)
+		      const char *name, struct node **node)
 {
   error_t err;
 
@@ -750,7 +756,7 @@ netfs_get_dirents (struct iouser *cred, struct node *dir,
 		   mach_msg_type_number_t *data_len,
 		   vm_size_t max_data_len, int *data_entries)
 {
-  error_t err;
+  error_t err = 0;
   int count = 0;
   size_t size = 0;		/* Total size of our return block.  */
   struct vcons *first_vcons = NULL;
@@ -813,11 +819,16 @@ netfs_get_dirents (struct iouser *cred, struct node *dir,
 	bump_size ("input");
     }
 
-  /* Allocate it.  */
-  *data = mmap (0, size, PROT_READ|PROT_WRITE, MAP_ANON, 0, 0);
-  err = ((void *) *data == (void *) -1) ? errno : 0;
+  if (!size)
+    *data_len = *data_entries = 0;
+  else
+    {
+      /* Allocate it.  */
+      *data = mmap (0, size, PROT_READ|PROT_WRITE, MAP_ANON, 0, 0);
+      err = ((void *) *data == (void *) -1) ? errno : 0;
+    }
 
-  if (! err)
+  if (size && !err)
     /* Copy out the result.  */
     {
       char *p = *data;
@@ -1026,7 +1037,7 @@ netfs_attempt_chmod (struct iouser *cred, struct node *node, mode_t mode)
 /* The user must define this function.  Attempt to turn locked node NP
    (user CRED) into a symlink with target NAME.  */
 error_t
-netfs_attempt_mksymlink (struct iouser *cred, struct node *np, char *name)
+netfs_attempt_mksymlink (struct iouser *cred, struct node *np, const char *name)
 {
   return EOPNOTSUPP;
 }
@@ -1065,35 +1076,35 @@ netfs_attempt_statfs (struct iouser *cred, struct node *np, struct statfs *st)
 
 error_t
 netfs_attempt_mkdir (struct iouser *user, struct node *dir,
-		     char *name, mode_t mode)
+		     const char *name, mode_t mode)
 {
   return EOPNOTSUPP;
 }
 
 error_t
-netfs_attempt_unlink (struct iouser *user, struct node *dir, char *name)
+netfs_attempt_unlink (struct iouser *user, struct node *dir, const char *name)
 {
   return EOPNOTSUPP;
 }
 
 error_t
 netfs_attempt_rename (struct iouser *user, struct node *fromdir,
-		      char *fromname, struct node *todir,
-		      char *toname, int excl)
+		      const char *fromname, struct node *todir,
+		      const char *toname, int excl)
 {
   return EOPNOTSUPP;
 }
 
 error_t
 netfs_attempt_rmdir (struct iouser *user,
-		     struct node *dir, char *name)
+		     struct node *dir, const char *name)
 {
   return EOPNOTSUPP;
 }
 
 error_t
 netfs_attempt_link (struct iouser *user, struct node *dir,
-		    struct node *file, char *name, int excl)
+		    struct node *file, const char *name, int excl)
 {
   return EOPNOTSUPP;
 }
@@ -1157,7 +1168,7 @@ netfs_attempt_read (struct iouser *cred, struct node *np,
 
 error_t
 netfs_attempt_write (struct iouser *cred, struct node *np,
-		     off_t offset, size_t *len, void *data)
+		     off_t offset, size_t *len, const void *data)
 {
   error_t err = 0;
   vcons_t vcons = np->nn->vcons;
@@ -1848,29 +1859,29 @@ S_tioctl_tiocnxcl (struct protid *cred)
 }
 
 kern_return_t
-S_tioctl_tiocgeta (struct protid *cred, tcflag_t *modes, cc_t *ccs,
-		   speed_t *speeds)
+S_tioctl_tiocgeta (struct protid *cred, modes_t modes, ccs_t ccs,
+		   speeds_t speeds)
 {
   return EOPNOTSUPP;
 }
 
 kern_return_t
-S_tioctl_tiocseta (struct protid *cred, tcflag_t *modes, cc_t *ccs,
-		   speed_t *speeds)
+S_tioctl_tiocseta (struct protid *cred, const modes_t modes, const ccs_t ccs,
+		   const speeds_t speeds)
 {
   return EOPNOTSUPP;
 }
 
 kern_return_t
-S_tioctl_tiocsetaw (struct protid *cred, tcflag_t *modes, cc_t *ccs,
-		    speed_t *speeds)
+S_tioctl_tiocsetaw (struct protid *cred, const modes_t modes, const ccs_t ccs,
+		    const speeds_t speeds)
 {
   return EOPNOTSUPP;
 }
 
 kern_return_t
-S_tioctl_tiocsetaf (struct protid *cred, tcflag_t *modes, cc_t *ccs,
-		    speed_t *speeds)
+S_tioctl_tiocsetaf (struct protid *cred, const modes_t modes, const ccs_t ccs,
+		    const speeds_t speeds)
 {
   return EOPNOTSUPP;
 }

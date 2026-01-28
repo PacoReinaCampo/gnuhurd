@@ -36,6 +36,7 @@
 #include <error.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <pthread.h>
 
 /* One of these exists for each pending RPC.  */
 struct rpc_list
@@ -58,7 +59,7 @@ static pthread_mutex_t outstanding_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Generate and return a new transaction ID.  */
 static inline int
-generate_xid ()
+generate_xid (void)
 {
   static int nextxid;
   
@@ -354,6 +355,8 @@ timeout_service_thread (void *arg)
 {
   (void) arg;
 
+  pthread_setname_np (pthread_self (), "timeout");
+
   while (1)
     {
       sleep (1);
@@ -373,6 +376,8 @@ rpc_receive_thread (void *arg)
   void *buf;
 
   (void) arg;
+
+  pthread_setname_np (pthread_self (), "rpc_receive");
 
   /* Allocate a receive buffer.  */
   buf = malloc (1024 + read_size);

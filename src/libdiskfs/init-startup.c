@@ -27,6 +27,7 @@
 #include <hurd/fsys.h>
 #include <hurd/paths.h>
 #include <hurd/startup.h>
+#include <assert-backtrace.h>
 
 #include "startup_S.h"
 
@@ -190,7 +191,7 @@ diskfs_S_startup_dosync (mach_port_t handle)
 /* This is called when we have an ordinary environment, complete
    with proc and auth ports. */
 void
-_diskfs_init_completed ()
+_diskfs_init_completed (void)
 {
   startup_t init;
   process_t proc;
@@ -223,21 +224,24 @@ _diskfs_init_completed ()
   if (init == MACH_PORT_NULL)
     {
       err = errno;
+      if (err == EPERM)
+	return;
       goto errout;
     }
 
   notify = ports_get_send_right (pi);
   ports_port_deref (pi);
-  asprintf (&name,
-	    "%s %s", program_invocation_short_name, diskfs_disk_name ?: "-");
+  err = asprintf (&name,
+	          "%s %s", program_invocation_short_name, diskfs_disk_name ?: "-");
+  assert_backtrace (err != -1);
   err = startup_request_notification (init, notify,
 				      MACH_MSG_TYPE_COPY_SEND, name);
   mach_port_deallocate (mach_task_self (), notify);
+  mach_port_deallocate (mach_task_self (), init);
   free (name);
-  if (err)
+  if (err && err != EPERM)
     goto errout;
 
-  mach_port_deallocate (mach_task_self (), init);
   return;
 
  errout:

@@ -104,7 +104,7 @@ ports_manage_port_operations_multithread (struct port_bucket *bucket,
 					  ports_demuxer_type demuxer,
 					  int thread_timeout,
 					  int global_timeout,
-					  void (*hook)())
+					  void (*hook)(void))
 {
   /* totalthreads is the number of total threads created.  nreqthreads
      is the number of threads not currently servicing any client.  The
@@ -128,14 +128,14 @@ ports_manage_port_operations_multithread (struct port_bucket *bucket,
       struct rpc_info link;
       mig_reply_header_t *outp = (mig_reply_header_t *) outheadp;
       static const mach_msg_type_t RetCodeType = {
-		/* msgt_name = */		MACH_MSG_TYPE_INTEGER_32,
-		/* msgt_size = */		32,
-		/* msgt_number = */		1,
-		/* msgt_inline = */		TRUE,
-		/* msgt_longform = */		FALSE,
-		/* msgt_deallocate = */		FALSE,
-		/* msgt_unused = */		0
-	};
+        .msgt_name = MACH_MSG_TYPE_INTEGER_32,
+        .msgt_size = 32,
+        .msgt_number = 1,
+        .msgt_inline = TRUE,
+        .msgt_longform = FALSE,
+        .msgt_deallocate = FALSE,
+        .msgt_unused = 0
+      };
 
       if (__atomic_sub_fetch (&nreqthreads, 1, __ATOMIC_RELAXED) == 0)
 	/* No thread would be listening for requests, spawn one. */
@@ -160,10 +160,10 @@ ports_manage_port_operations_multithread (struct port_bucket *bucket,
 	      perror ("pthread_create");
 	    }
 	}
-      
+
       /* Fill in default response. */
-      outp->Head.msgh_bits 
-	= MACH_MSGH_BITS(MACH_MSGH_BITS_REMOTE(inp->msgh_bits), 0);
+      outp->Head.msgh_bits
+        = MACH_MSGH_BITS (MACH_MSGH_BITS_REMOTE (inp->msgh_bits), 0);
       outp->Head.msgh_size = sizeof *outp;
       outp->Head.msgh_remote_port = inp->msgh_remote_port;
       outp->Head.msgh_local_port = MACH_PORT_NULL;
@@ -229,7 +229,7 @@ ports_manage_port_operations_multithread (struct port_bucket *bucket,
   thread_function (void *arg)
     {
       struct ports_thread thread;
-      int master = (int) arg;
+      int master = (int)(uintptr_t) arg;
       int timeout;
       error_t err;
 
@@ -256,11 +256,14 @@ ports_manage_port_operations_multithread (struct port_bucket *bucket,
     startover:
 
       do
-	err = mach_msg_server_timeout (synchronized_demuxer,
-				       0, bucket->portset,
-				       timeout ? MACH_RCV_TIMEOUT : 0,
-				       timeout);
-      while (err != MACH_RCV_TIMED_OUT);
+	{
+	  err = mach_msg_server_timeout (synchronized_demuxer,
+					 0, bucket->portset,
+					 MACH_RCV_TIMEOUT,
+					 timeout ? timeout : 10 * 1000);
+	  _ports_thread_quiescent (&bucket->threadpool, &thread);
+	}
+      while (!(timeout && err == MACH_RCV_TIMED_OUT));
 
       if (master)
 	{

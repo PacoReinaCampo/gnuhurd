@@ -25,7 +25,7 @@ diskfs_S_io_read (struct protid *cred,
 		  data_t *data,
 		  mach_msg_type_number_t *datalen,
 		  off_t offset,
-		  mach_msg_type_number_t maxread)
+		  vm_size_t maxread)
 {
   struct node *np;
   int err;
@@ -61,6 +61,7 @@ diskfs_S_io_read (struct protid *cred,
     {
       ourbuf = 1;
       buf = mmap (0, maxread, PROT_READ|PROT_WRITE, MAP_ANON, 0, 0);     
+      assert_backtrace (buf != MAP_FAILED);
       *data = buf;
     }
   else

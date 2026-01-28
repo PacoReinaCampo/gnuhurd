@@ -31,11 +31,13 @@ trivfs_S_fsys_getroot (struct trivfs_control *cntl,
 		       mach_port_t reply_port,
 		       mach_msg_type_name_t reply_port_type,
 		       mach_port_t dotdot,
-		       uid_t *uids, size_t nuids,
-		       uid_t *gids, size_t ngids,
+		       const id_t *uids,
+		       mach_msg_type_number_t nuids,
+		       const id_t *gids,
+		       mach_msg_type_number_t ngids,
 		       int flags,
 		       retry_type *do_retry,
-		       char *retry_name,
+		       string_t retry_name,
 		       mach_port_t *newpt,
 		       mach_msg_type_name_t *newpttype)
 {
@@ -70,7 +72,7 @@ trivfs_S_fsys_getroot (struct trivfs_control *cntl,
   flags &= ~(O_CREAT|O_EXCL|O_NOLINK|O_NOTRANS);
 
   struct idvec idvec = {
-    .ids = uids,
+    .ids = (id_t*) uids,
     .num = nuids,
     .alloced = nuids,
   };

@@ -33,8 +33,15 @@ const char *const mach_cpu_types[] =
 #ifdef CPU_TYPE_POWERPC
     [CPU_TYPE_POWERPC] = "powerpc",
 #endif
+#ifdef CPU_TYPE_X86_64
+    [CPU_TYPE_X86_64] = "x86_64",
+#endif
+#ifdef CPU_TYPE_ARM64
+    [CPU_TYPE_ARM64] = "aarch64",
+#endif
   };
 
+#ifndef __x86_64__
 const char *const mach_cpu_subtypes[][32] =
   {
     [CPU_TYPE_VAX] =
@@ -96,6 +103,9 @@ const char *const mach_cpu_subtypes[][32] =
 #endif
 #ifdef CPU_TYPE_PENTIUMPRO
     [CPU_TYPE_PENTIUMPRO] = Ix86_SUBTYPES,
+#endif
+#ifdef CPU_TYPE_X86_64
+    [CPU_TYPE_X86_64] = Ix86_SUBTYPES,
 #endif
     [CPU_TYPE_MIPS] =
       {
@@ -161,3 +171,4 @@ const char *const mach_cpu_subtypes[][32] =
 	[CPU_SUBTYPE_ALPHA_21064] = "ALPHA_21064",
       },
   };
+#endif  /* !__x86_64__ */

@@ -1,5 +1,5 @@
 /* Reply half of wait
-   Copyright (C) 1991,93,94,96,2001,13 Free Software Foundation, Inc.
+   Copyright (C) 1991,93,94,96,2001,13,21 Free Software Foundation, Inc.
 
 This file is part of the GNU Hurd.
 
@@ -43,7 +43,7 @@ simpleroutine proc_setmsgport_reply (
 	in oldmsgport: mach_port_t);
 
 skip; /* reassign */
-skip; /* setowner */
+skip; /* was setowner */
 skip; /* getpids */
 skip; /* set_arg_locations */
 skip; /* get_arg_locations */
@@ -200,3 +200,8 @@ skip; /* proc_get_exe */
 
 skip; /* proc_set_entry */
 skip; /* proc_get_entry */
+
+skip; /* proc_waitid */
+
+skip; /* proc_reauthenticate_reassign */
+skip; /* proc_reauthenticate_complete */

@@ -332,6 +332,24 @@ destructor: SHUTDOWN_DESTRUCTOR
 #endif
 ;
 
+/* ACPI */
+type acpi_t = mach_port_copy_send_t
+#ifdef ACPI_INTRAN
+intran: ACPI_INTRAN
+intranpayload: ACPI_INTRAN_PAYLOAD
+#else
+#ifdef HURD_DEFAULT_PAYLOAD_TO_PORT
+intranpayload: acpi_t HURD_DEFAULT_PAYLOAD_TO_PORT
+#endif
+#endif
+#ifdef ACPI_OUTTRAN
+outtran: ACPI_OUTTRAN
+#endif
+#ifdef ACPI_DESTRUCTOR
+destructor: ACPI_DESTRUCTOR
+#endif
+;
+
 type proccoll_t = mach_port_copy_send_t;
 
 type sreply_port_t = MACH_MSG_TYPE_MAKE_SEND_ONCE | polymorphic
@@ -360,12 +378,7 @@ intranpayload: mach_port_t MACH_PAYLOAD_TO_PORT
 #define SCP
 #endif
 
-#ifdef HAVE_MIG_RETCODE
 #define RETURN_CODE_ARG in return_code: kern_return_t, retcode
-#else
-#define RETURN_CODE_ARG in return_code: kern_return_t
-#endif
-
 
 #ifdef USERPREFIX
 userprefix USERPREFIX;
@@ -383,7 +396,6 @@ serverprefix SERVERPREFIX;
 
 type data_t = array[] of char;
 type string_t = c_string[1024]; /* XXX */
-type io_statbuf_t = struct[32] of int;
 type uid_t = uint32_t;
 type gid_t = uint32_t;
 type mode_t = uint32_t;
@@ -401,15 +413,113 @@ type off_array_t = array[] of loff_t;
 
 type pidarray_t = array[] of pid_t;
 type procinfo_t = array[] of int;
-type fsys_statfsbuf_t=struct[22] of int;
 
 type idarray_t = array[] of uid_t;
 
-type rusage_t = struct[18] of int; /* XXX */
+type flock_t = struct {
+   int l_type;
+   int l_whence;
+   loff_t l_start;
+   loff_t l_len;
+   pid_t l_pid;
+};
 
-type flock_t = struct[7] of int; /* l_start and l_len are 64 bit */
+type unsigned_int = uint32_t;
+#if defined(__LP64__)
+type long = int64_t;
+type unsigned_long = uint64_t;
 
-type timespec_t = struct[2] of int;
+/* Type names are in sync with glibc/posix/bits/types.h. */
+type uword = unsigned_long;
+type uquad = unsigned_long;
+type squad = long;
+#else
+type long = int32_t;
+type unsigned_long = uint32_t;
+
+type uword = unsigned_int;
+type uquad = uint64_t;
+type squad = int64_t;
+#endif /* defined(__x86_64__) */
+
+type blksize_t = long;
+type blkcnt64_t = squad;
+type dev_t = uword;
+type fsblkcnt64_t = uquad;
+type fsfilcnt64_t = uquad;
+type fsid_t = uquad;
+type nlink_t = uword;
+
+type time_t = long;
+
+type timespec_t = struct {
+  time_t tv_sec;
+  long tv_nsec;
+};
+type timeval = timespec_t;
+
+/* Dummy structure just to add padding to io_statbuf_t. */
+type io_statbuf_spare_int = struct[8] of int;
+/* Needs to be kept in sync with glibc/mach/hurd/bits/stat.h. */
+type io_statbuf_t = struct {
+   int st_fstype;
+   fsid_t st_fsid;
+   ino64_t st_ino;
+   unsigned_int st_gen;
+   dev_t st_rdev;
+   mode_t st_mode;
+   nlink_t st_nlink;
+   uid_t st_uid;
+   gid_t st_gid;
+   loff_t st_size;
+   timespec_t st_atim;
+   timespec_t st_mtim;
+   timespec_t st_ctim;
+   blksize_t st_blksize;
+   blkcnt64_t st_blocks;
+   uid_t st_author;
+   unsigned_int st_flags;
+   io_statbuf_spare_int st_spare;
+};
+
+/* Needs to be kept in sync with glibc/mach/hurd/bits/statfs.h. */
+type fsys_statfsbuf_t = struct {
+   unsigned_int f_type;
+   unsigned_long f_bsize;
+   fsblkcnt64_t f_blocks;
+   fsblkcnt64_t f_bfree;
+   fsblkcnt64_t f_bavail;
+   fsblkcnt64_t f_files;
+   fsblkcnt64_t f_ffree;
+   fsid_t f_fsid;
+   unsigned_long f_namelen;
+   fsfilcnt64_t f_favail;
+   unsigned_long f_frsize;
+   unsigned_long f_flag;
+   unsigned_int f_spare1;
+   unsigned_int f_spare2;
+   unsigned_int f_spare3;
+};
+
+/* Needs to be kept in sync with glibc/resource/bits/types/struct_rusage.h. */
+type rusage_t = struct {
+   timeval ru_utime;
+   timeval ru_stime;
+   long ru_maxrss;
+   long ru_ixrss;
+   long ru_idrss;
+   long ru_isrss;
+   long ru_minflt;
+   long ru_majflt;
+   long ru_nswap;
+   long ru_inblock;
+   long ru_oublock;
+   long ru_msgsnd;
+   long ru_msgrcv;
+   long ru_nsignals;
+   long ru_nvcsw;
+   long ru_nivcsw;
+};
 
 #define _SYS_UTSNAME_H		/* Inhibit warning from <bits/utsname.h>.  */
 #include <bits/utsname.h>

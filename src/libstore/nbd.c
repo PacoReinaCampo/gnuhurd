@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <assert-backtrace.h>
 
 
 // Avoid dragging in the resolver when linking statically.
@@ -119,7 +120,7 @@ nbd_write (struct store *store,
     type: htonl (1),		/* WRITE */
   };
   error_t err;
-  mach_msg_type_number_t cc;
+  vm_size_t cc;
 
   addr <<= store->log2_block_size;
   *amount = 0;
@@ -171,14 +172,15 @@ nbd_read (struct store *store,
   error_t err;
   size_t ofs, chunk;
   char *databuf, *piecebuf;
-  size_t databuflen, piecelen;
+  size_t databuflen;
+  mach_msg_type_number_t piecelen;
 
   /* Send a request for the largest possible piece of remaining data and
      read the first piece of its reply into PIECEBUF, PIECELEN.  The amount
      requested can be found in CHUNK.  */
-  inline error_t request_chunk (char **buf, size_t *len)
+  inline error_t request_chunk (char **buf, mach_msg_type_number_t *len)
     {
-      mach_msg_type_number_t cc;
+      vm_size_t cc;
 
       chunk = (amount - ofs) < NBD_IO_MAX ? (amount - ofs) : NBD_IO_MAX;
 
@@ -435,7 +437,7 @@ nbdclose (struct store *store)
 	magic: NBD_REQUEST_MAGIC,
 	type: htonl (2),	/* disconnect */
       };
-      mach_msg_type_number_t cc;
+      vm_size_t cc;
       (void) io_write (store->port, (char *) &req, sizeof req, -1, &cc);
 
       /* Close the socket.  */
@@ -518,7 +520,10 @@ store_nbd_open (const char *name, int flags, struct store **store)
 	  if (!strncmp (name, url_prefix, sizeof url_prefix - 1))
 	    err = store_set_name (*store, name);
 	  else
-	    asprintf (&(*store)->name, "%s%s", url_prefix, name);
+	    {
+	      int err2 = asprintf (&(*store)->name, "%s%s", url_prefix, name);
+	      assert_backtrace (err2 != -1);
+	    }
 	  if (err)
 	    store_free (*store);
 	}

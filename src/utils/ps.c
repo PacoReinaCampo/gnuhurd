@@ -21,7 +21,6 @@
 #include <hurd.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <assert-backtrace.h>
 #include <string.h>
 #include <ctype.h>
 #include <unistd.h>
@@ -35,6 +34,7 @@
 #include "psout.h"
 #include "parse.h"
 #include "pids.h"
+#include "msgids.h"
 
 const char *argp_program_version = STANDARD_HURD_VERSION (ps);
 
@@ -187,7 +187,7 @@ main(int argc, char *argv[])
   int posix_fmt = 0;		/* Use a posix_fmt-style format string.  */
   int top = 0;			/* Number of entries to output.  */
   pid_t *pids = 0;		/* User-specified pids.  */
-  size_t num_pids = 0;
+  mach_msg_type_number_t num_pids = 0;
   struct pids_argp_params pids_argp_params = { &pids, &num_pids, 1 };
 
   /* Add a user who's processes should be printed out.  */
@@ -227,9 +227,9 @@ main(int argc, char *argv[])
 	argp_failure (state, 8, err, "%s: Can't add tty", tty_name);
       return err;
     }
-  int proc_stat_has_ctty(struct proc_stat *ps)
+  int proc_stat_has_ctty (struct proc_stat *ps)
     {
-      if (proc_stat_has(ps, PSTAT_TTY))
+      if (proc_stat_has (ps, PSTAT_TTY))
 	/* Only match processes whose tty we can figure out.  */
 	{
 	  struct ps_tty *tty = proc_stat_tty (ps);
@@ -237,7 +237,7 @@ main(int argc, char *argv[])
 	    {
 	      char *try = 0;
 	      const char *name = ps_tty_name (tty);
-	      const char *short_name = ps_tty_short_name(tty);
+	      const char *short_name = ps_tty_short_name (tty);
 
 	      while ((try = argz_next (tty_names, num_tty_names, try)))
 		if ((name && strcmp (try, name) == 0)
@@ -249,18 +249,18 @@ main(int argc, char *argv[])
     }
 
   /* Returns the name of the current controlling terminal.  */
-  const char *current_tty_name()
+  const char *current_tty_name (struct argp_state *state)
     {
       error_t err;
       struct ps_tty *tty;
-      mach_port_t cttyid = getcttyid();
+      mach_port_t cttyid = getcttyid ();
 
       if (cttyid == MACH_PORT_NULL)
-	error(2, 0, "No controlling terminal");
+	error (2, 0, "No controlling terminal");
 
       err = ps_context_find_tty_by_cttyid (context, cttyid, &tty);
       if (err)
-	error(2, err, "Can't get controlling terminal");
+	error (2, err, "Can't get controlling terminal");
 
       return ps_tty_name (tty);
     }
@@ -366,6 +366,13 @@ main(int argc, char *argv[])
 
   /* Parse our command line.  This shouldn't ever return an error.  */
   argp_parse (&argp, argc, argv, 0, 0, 0);
+
+  /* If no output width limit has been set explicitly, and we're not printing
+     to a tty, do not limit output width.  */
+  if (output_width == -1 && !isatty (STDOUT_FILENO))
+    output_width = 0;
+
+  msgids_scan_std ();
 
   err = proc_stat_list_create(context, &procset);
   if (err)

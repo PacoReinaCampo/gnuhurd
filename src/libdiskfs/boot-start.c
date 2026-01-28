@@ -52,12 +52,12 @@ static pthread_cond_t execstarted;
 
 const char *diskfs_boot_init_program = _HURD_STARTUP;
 
-static void start_execserver ();
+static void start_execserver (void);
 
 char **diskfs_argv = 0;
 
 static mach_port_t
-get_console ()
+get_console (void)
 {
   mach_port_t device_master, console;
   error_t err = get_privileged_ports (0, &device_master);
@@ -95,7 +95,7 @@ _diskfs_boot_privports (void)
 /* Once diskfs_root_node is set, call this if we are a bootstrap
    filesystem.  */
 void
-diskfs_start_bootstrap ()
+diskfs_start_bootstrap (void)
 {
   mach_port_t root_pt, startup_pt, bootpt;
   retry_type retry;
@@ -185,7 +185,8 @@ diskfs_start_bootstrap ()
 			&retry, retry_name, &execnode);
       if (err)
 	{
-	  error (0, err, "cannot set translator on %s", _SERVERS_EXEC);
+	  mach_print ("cannot set translator on " _SERVERS_EXEC "\n");
+	  error (0, err, "cannot set translator on " _SERVERS_EXEC);
 	  mach_port_deallocate (mach_task_self (), diskfs_exec_ctl);
 	}
       else
@@ -248,8 +249,9 @@ diskfs_start_bootstrap ()
       while (err == KERN_NAME_EXISTS);
       diskfs_kernel_task = MACH_PORT_NULL;
 
-      len = snprintf (buf, sizeof buf, "--kernel-task=%lu", kernel_task_name);
-      assert_backtrace (len < sizeof buf);
+      len = snprintf (buf, sizeof buf, "--kernel-task=%u", kernel_task_name);
+      assert_backtrace (len > 0);
+      assert_backtrace ((size_t) len < sizeof buf);
       /* Insert as second argument.  */
       err = argz_insert (&exec_argv, &exec_argvlen,
                          argz_next (exec_argv, exec_argvlen, exec_argv), buf);
@@ -318,7 +320,10 @@ diskfs_start_bootstrap ()
 		      With none supplied, it will use the defaults.  */
 		   NULL, 0, 0, 0, 0, 0);
   if (err)
-    error (1, err, "Executing '%s'", exec_argv);
+    {
+      mach_print ("Failed to execute startup\n");
+      error (1, err, "Executing '%s'", exec_argv);
+    }
   free (exec_argv);
   free (exec_env);
   mach_port_deallocate (mach_task_self (), root_pt);
@@ -369,14 +374,20 @@ diskfs_S_exec_startup_get_info (struct bootinfo *upt,
   *flags = EXEC_STACK_ARGS;
 
   if (*portarraylen < INIT_PORT_MAX)
-    *portarrayP = mmap (0, INIT_PORT_MAX * sizeof (mach_port_t),
-			PROT_READ|PROT_WRITE, MAP_ANON, 0, 0);
+    {
+      *portarrayP = mmap (0, INIT_PORT_MAX * sizeof (mach_port_t),
+			  PROT_READ|PROT_WRITE, MAP_ANON, 0, 0);
+      assert_backtrace (*portarrayP != MAP_FAILED);
+    }
   portarray = *portarrayP;
   *portarraylen = INIT_PORT_MAX;
 
   if (*dtablelen < 3)
-    *dtableP = mmap (0, 3 * sizeof (mach_port_t), PROT_READ|PROT_WRITE,
-		     MAP_ANON, 0, 0);
+    {
+      *dtableP = mmap (0, 3 * sizeof (mach_port_t), PROT_READ|PROT_WRITE,
+		       MAP_ANON, 0, 0);
+      assert_backtrace (*dtableP != MAP_FAILED);
+    }
   dtable = *dtableP;
   *dtablelen = 3;
   dtable[0] = dtable[1] = dtable[2] = get_console (); /* XXX */
@@ -463,7 +474,7 @@ diskfs_S_fsys_getpriv (struct diskfs_control *init_bootstrap_port,
   error_t err;
 
   if (!init_bootstrap_port
-      || init_bootstrap_port != bootinfo)
+      || init_bootstrap_port != (struct diskfs_control *) bootinfo)
     return EOPNOTSUPP;
 
   err = get_privileged_ports (host_priv, dev_master);
@@ -489,6 +500,7 @@ diskfs_S_fsys_init (struct diskfs_control *pt,
   mach_port_t host, startup;
   error_t err;
   mach_port_t root_pt;
+  mach_port_t bootstrap;
   struct protid *rootpi;
   struct peropen *rootpo;
 
@@ -516,9 +528,11 @@ diskfs_S_fsys_init (struct diskfs_control *pt,
     mach_port_deallocate (mach_task_self (), diskfs_auth_server_port);
   diskfs_auth_server_port = authhandle;
 
+  err = task_get_bootstrap_port (mach_task_self (), &bootstrap);
+  assert_perror_backtrace (err);
+
   if (diskfs_exec_server_task != MACH_PORT_NULL)
     {
-      mach_port_t bootstrap;
       process_t execprocess;
 
       err = proc_task2proc (procserver, diskfs_exec_server_task, &execprocess);
@@ -535,28 +549,15 @@ diskfs_S_fsys_init (struct diskfs_control *pt,
 				execprocess, MACH_MSG_TYPE_COPY_SEND));
       mach_port_deallocate (mach_task_self (), execprocess);
 
-      /* Give the real bootstrap filesystem an fsys_init RPC of its own */
-      err = task_get_bootstrap_port (mach_task_self (), &bootstrap);
-      assert_perror_backtrace (err);
-      if (bootstrap != MACH_PORT_NULL)
-        {
-          err = fsys_init (bootstrap, procserver, MACH_MSG_TYPE_COPY_SEND,
-                           authhandle);
-          mach_port_deallocate (mach_task_self (), bootstrap);
-          assert_perror_backtrace (err);
-        }
-
       /* We don't need this anymore. */
       mach_port_deallocate (mach_task_self (), diskfs_exec_server_task);
       diskfs_exec_server_task = MACH_PORT_NULL;
     }
   else
+    assert_backtrace (parent_task != MACH_PORT_NULL);
+
+  if (parent_task != MACH_PORT_NULL)
     {
-      mach_port_t bootstrap;
-      process_t parent_proc;
-
-      assert_backtrace (parent_task != MACH_PORT_NULL);
-
       /* Tell the proc server that our parent task is our child.  This
 	 makes the process hierarchy fail to represent the real order of
 	 who created whom, but it sets the owner and authentication ids to
@@ -568,6 +569,15 @@ diskfs_S_fsys_init (struct diskfs_control *pt,
 
       err = proc_child (procserver, parent_task);
       assert_perror_backtrace (err);
+    }
+
+  if (bootstrap != MACH_PORT_NULL)
+    {
+      /* Give our parent (the real bootstrap filesystem) an fsys_init
+	 RPC of its own, as init would have sent it.  */
+      process_t parent_proc;
+
+      assert_backtrace (parent_task != MACH_PORT_NULL);
 
       /* Get the parent's proc server port so we can send it in the fsys_init
 	 RPC just as init would.  */
@@ -580,15 +590,12 @@ diskfs_S_fsys_init (struct diskfs_control *pt,
 
       proc_mark_exec (parent_proc);
 
-      /* Give our parent (the real bootstrap filesystem) an fsys_init
-	 RPC of its own, as init would have sent it.  */
-      err = task_get_bootstrap_port (mach_task_self (), &bootstrap);
-      assert_perror_backtrace (err);
       err = fsys_init (bootstrap, parent_proc, MACH_MSG_TYPE_COPY_SEND,
 		       authhandle);
+      assert_perror_backtrace (err);
+
       mach_port_deallocate (mach_task_self (), parent_proc);
       mach_port_deallocate (mach_task_self (), bootstrap);
-      assert_perror_backtrace (err);
     }
 
   /* Get a port to the root directory to put in the library's
@@ -626,6 +633,7 @@ diskfs_S_fsys_init (struct diskfs_control *pt,
       unsigned int i;
       portarray = mmap (0, INIT_PORT_MAX * sizeof *portarray,
 			PROT_READ|PROT_WRITE, MAP_ANON, 0, 0);
+      assert_backtrace (portarray != MAP_FAILED);
       if (MACH_PORT_NULL != (mach_port_t) 0)
 	for (i = 0; i < INIT_PORT_MAX; ++i)
 	  portarray[i] = MACH_PORT_NULL;
@@ -634,6 +642,9 @@ diskfs_S_fsys_init (struct diskfs_control *pt,
       portarray[INIT_PORT_CRDIR] = root_pt;
       portarray[INIT_PORT_CWDIR] = root_pt;
       _hurd_init (0, diskfs_argv, portarray, INIT_PORT_MAX, NULL, 0);
+#ifdef HAVE__HURD_LIBC_PROC_INIT
+      _hurd_libc_proc_init(diskfs_argv);
+#endif
     }
 
   err = get_privileged_ports (&host, 0);

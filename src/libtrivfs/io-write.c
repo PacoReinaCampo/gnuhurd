@@ -24,10 +24,10 @@ kern_return_t
 trivfs_S_io_write (struct trivfs_protid *cred,
 		   mach_port_t reply,
 		   mach_msg_type_name_t replytype,
-		   data_t data,
+		   const_data_t data,
 		   mach_msg_type_number_t datalen,
 		   off_t off,
-		   mach_msg_type_number_t *amt)
+		   vm_size_t *amt)
 {
   if (!(trivfs_allow_open & O_WRITE))
     return EBADF;

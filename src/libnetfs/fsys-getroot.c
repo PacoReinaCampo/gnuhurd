@@ -25,16 +25,16 @@
 #include <fcntl.h>
 #include <hurd/fshelp.h>
 
-error_t
+kern_return_t
 netfs_S_fsys_getroot (struct netfs_control *pt,
 		      mach_port_t reply,
 		      mach_msg_type_name_t reply_type,
 		      mach_port_t dotdot,
-		      uid_t *uids, mach_msg_type_number_t nuids,
-		      uid_t *gids, mach_msg_type_number_t ngids,
+		      const id_t *uids, mach_msg_type_number_t nuids,
+		      const id_t *gids, mach_msg_type_number_t ngids,
 		      int flags,
 		      retry_type *do_retry,
-		      char *retry_name,
+		      string_t retry_name,
 		      mach_port_t *retry_port,
 		      mach_msg_type_name_t *retry_port_type)
 {

@@ -37,6 +37,7 @@
 #include "driver.h"
 #include "timer.h"
 
+#include "fb.h"
 #include "vga-hw.h"
 #include "vga-support.h"
 #include "bdf.h"
@@ -132,6 +133,8 @@ struct vga_display
   struct refchr refmatrix[VGA_DISP_HEIGHT][VGA_DISP_WIDTH];
 };
 
+/* Forward declaration */
+struct driver_ops driver_vga_ops;
 
 static void
 vga_display_invert_border (void)
@@ -279,8 +282,10 @@ vga_display_init (void **handle, int no_exit, int argc, char *argv[],
 		  int *next)
 {
   error_t err;
-  struct vga_display *disp;
+  struct vga_display *vgadisp;
   int pos = 1;
+
+  fb_get_multiboot_params();
 
   /* XXX Assert that we are called only once.  */
   pthread_mutex_init (&vga_display_lock, NULL);
@@ -294,18 +299,21 @@ vga_display_init (void **handle, int no_exit, int argc, char *argv[],
   if (err && err != EINVAL)
     return err;
 
-  /* Create and initialize the display structure as much as
-     possible.  */
-  disp = calloc (1, sizeof *disp);
-  if (!disp)
+  if (fb_type != MULTIBOOT_FRAMEBUFFER_TYPE_EGA_TEXT)
+    return fb_display_init (handle, &driver_vga_ops);
+
+  /* EGA text mode */
+  vgadisp = calloc (1, sizeof *vgadisp);
+  if (!vgadisp)
     return ENOMEM;
 
-  disp->df_size = vga_display_max_glyphs ? 512 : 256;
-  disp->df_width = vga_display_font_width;
-  disp->width = VGA_DISP_WIDTH;
-  disp->height = VGA_DISP_HEIGHT;
+  vgadisp->df_size = vga_display_max_glyphs ? 512 : 256;
+  vgadisp->df_width = vga_display_font_width;
+  vgadisp->width = VGA_DISP_WIDTH;
+  vgadisp->height = VGA_DISP_HEIGHT;
 
-  *handle = disp;
+  *handle = vgadisp;
+
   return 0;
 }
 
@@ -477,14 +485,14 @@ vga_display_scroll (void *handle, int delta)
 
   if (delta > 0)
     {
-      memmove (vga_videomem, vga_videomem + 2 * count,
-	       2 * disp->width * (disp->height - delta));
+      vga_memmove (vga_videomem, vga_videomem + 2 * count,
+		    2 * disp->width * (disp->height - delta));
       refpos = &disp->refmatrix[0][0];
     }
   else
     {
-      memmove (vga_videomem + 2 * count, vga_videomem,
-	       2 * disp->width * (disp->height + delta));
+      vga_memmove (vga_videomem + 2 * count, vga_videomem,
+		    2 * disp->width * (disp->height + delta));
       refpos = &disp->refmatrix[disp->height + delta][0];
     }
   

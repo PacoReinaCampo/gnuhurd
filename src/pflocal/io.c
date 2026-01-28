@@ -41,13 +41,14 @@
 /* Read data from an IO object.  If offset if -1, read from the object
    maintained file pointer.  If the object is not seekable, offset is
    ignored.  The amount desired to be read is in amount.  */
-error_t
+kern_return_t
 S_io_read (struct sock_user *user,
 	   data_t *data, mach_msg_type_number_t *data_len,
-	   off_t offset, mach_msg_type_number_t amount)
+	   off_t offset, vm_size_t amount)
 {
   error_t err;
   struct pipe *pipe;
+  size_t data_size = *data_len;
 
   if (!user)
     return EOPNOTSUPP;
@@ -63,8 +64,9 @@ S_io_read (struct sock_user *user,
     {
       err =
 	pipe_read (pipe, user->sock->flags & PFLOCAL_SOCK_NONBLOCK, NULL,
-		   data, data_len, amount);
+		   data, &data_size, amount);
       pipe_release_reader (pipe);
+      *data_len = data_size;
     }
 
   return err;
@@ -77,10 +79,10 @@ S_io_read (struct sock_user *user,
    object at a time; servers implement congestion control by delaying
    responses to io_write.  Servers may drop data (returning ENOBUFS)
    if they recevie more than one write when not prepared for it.  */
-error_t
+kern_return_t
 S_io_write (struct sock_user *user,
-	    data_t data, mach_msg_type_number_t data_len,
-	    off_t offset, mach_msg_type_number_t *amount)
+	    const_data_t data, mach_msg_type_number_t data_len,
+	    off_t offset, vm_size_t *amount)
 {
   error_t err;
   struct pipe *pipe;
@@ -118,8 +120,8 @@ S_io_write (struct sock_user *user,
 /* Tell how much data can be read from the object without blocking for
    a "long time" (this should be the same meaning of "long time" used
    by the nonblocking flag.  */
-error_t
-S_io_readable (struct sock_user *user, mach_msg_type_number_t *amount)
+kern_return_t
+S_io_readable (struct sock_user *user, vm_size_t *amount)
 {
   error_t err;
   struct pipe *pipe;
@@ -144,7 +146,7 @@ S_io_readable (struct sock_user *user, mach_msg_type_number_t *amount)
 }
 
 /* Change current read/write offset */
-error_t
+kern_return_t
 S_io_seek (struct sock_user *user,
 	   off_t offset, int whence, off_t *new_offset)
 {
@@ -152,7 +154,7 @@ S_io_seek (struct sock_user *user,
 }
 
 /* Return a new port with the same semantics as the existing port. */
-error_t
+kern_return_t
 S_io_duplicate (struct sock_user *user,
 		mach_port_t *new_port, mach_msg_type_name_t *new_port_type)
 {
@@ -280,7 +282,7 @@ io_select_common (struct sock_user *user,
   return err;
 }
 
-error_t
+kern_return_t
 S_io_select (struct sock_user *user,
 	     mach_port_t reply, mach_msg_type_name_t reply_type,
 	     int *select_type)
@@ -288,7 +290,7 @@ S_io_select (struct sock_user *user,
   return io_select_common (user, reply, reply_type, NULL, select_type);
 }
 
-error_t
+kern_return_t
 S_io_select_timeout (struct sock_user *user,
 		     mach_port_t reply, mach_msg_type_name_t reply_type,
 		     struct timespec ts,
@@ -308,7 +310,7 @@ copy_time (time_value_t *from, time_t *to_sec, long *to_nsec)
    io_statuf_t are meaningful for all objects; however, the access and
    modify times, the optimal IO size, and the fs type are meaningful
    for all objects.  */
-error_t
+kern_return_t
 S_io_stat (struct sock_user *user, struct stat *st)
 {
   struct sock *sock;
@@ -324,11 +326,18 @@ S_io_stat (struct sock_user *user, struct stat *st)
   st->st_fstype = FSTYPE_SOCKET;
   st->st_mode = sock->mode;
   st->st_fsid = getpid ();
-  st->st_ino = sock->id;
+
   /* As we try to be clever with large transfers, ask for them. */
   st->st_blksize = vm_page_size * 16;
+  st->st_uid = sock->uid;
+  st->st_gid = sock->gid;
 
   pthread_mutex_lock (&sock->lock);	/* Make sure the pipes don't go away...  */
+
+  if (sock->id == MACH_PORT_NULL)
+    mach_port_allocate (mach_task_self (), MACH_PORT_RIGHT_RECEIVE,
+				&sock->id);
+  st->st_ino = sock->id;
 
   rpipe = sock->read_pipe;
   wpipe = sock->write_pipe;
@@ -356,7 +365,7 @@ S_io_stat (struct sock_user *user, struct stat *st)
   return 0;
 }
 
-error_t
+kern_return_t
 S_io_get_openmodes (struct sock_user *user, int *bits)
 {
   unsigned flags;
@@ -371,7 +380,7 @@ S_io_get_openmodes (struct sock_user *user, int *bits)
   return 0;
 }
 
-error_t
+kern_return_t
 S_io_set_all_openmodes (struct sock_user *user, int bits)
 {
   if (!user)
@@ -387,7 +396,7 @@ S_io_set_all_openmodes (struct sock_user *user, int bits)
   return 0;
 }
 
-error_t
+kern_return_t
 S_io_set_some_openmodes (struct sock_user *user, int bits)
 {
   if (!user)
@@ -401,7 +410,7 @@ S_io_set_some_openmodes (struct sock_user *user, int bits)
   return 0;
 }
 
-error_t
+kern_return_t
 S_io_clear_some_openmodes (struct sock_user *user, int bits)
 {
   if (!user)
@@ -417,7 +426,7 @@ S_io_clear_some_openmodes (struct sock_user *user, int bits)
 
 #define NIDS 10
 
-error_t
+kern_return_t
 S_io_reauthenticate (struct sock_user *user, mach_port_t rendezvous)
 {
   error_t err;
@@ -427,8 +436,8 @@ S_io_reauthenticate (struct sock_user *user, mach_port_t rendezvous)
   uid_t *uids = uids_buf, *aux_uids = aux_uids_buf;
   gid_t gids_buf[NIDS], aux_gids_buf[NIDS];
   gid_t *gids = gids_buf, *aux_gids = aux_gids_buf;
-  size_t num_uids = NIDS, num_aux_uids = NIDS;
-  size_t num_gids = NIDS, num_aux_gids = NIDS;
+  mach_msg_type_number_t num_uids = NIDS, num_aux_uids = NIDS;
+  mach_msg_type_number_t num_gids = NIDS, num_aux_gids = NIDS;
 
   if (!user)
     return EOPNOTSUPP;
@@ -468,12 +477,12 @@ S_io_reauthenticate (struct sock_user *user, mach_port_t rendezvous)
   return err;
 }
 
-error_t
+kern_return_t
 S_io_restrict_auth (struct sock_user *user,
 		    mach_port_t *new_port,
 		    mach_msg_type_name_t *new_port_type,
-		    uid_t *uids, size_t num_uids,
-		    uid_t *gids, size_t num_gids)
+		    const uid_t *uids, mach_msg_type_number_t num_uids,
+		    const uid_t *gids, mach_msg_type_number_t num_gids)
 {
   if (!user)
     return EOPNOTSUPP;
@@ -481,7 +490,7 @@ S_io_restrict_auth (struct sock_user *user,
   return sock_create_port (user->sock, new_port);
 }
 
-error_t
+kern_return_t
 S_io_pathconf (struct sock_user *user, int name, int *value)
 {
   if (user == NULL)
@@ -500,7 +509,7 @@ S_io_pathconf (struct sock_user *user, int name, int *value)
     return EINVAL;
 }
 
-error_t
+kern_return_t
 S_io_identity (struct sock_user *user,
 	       mach_port_t *id, mach_msg_type_name_t *id_type,
 	       mach_port_t *fsys_id, mach_msg_type_name_t *fsys_id_type,

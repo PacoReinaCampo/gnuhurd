@@ -28,39 +28,15 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "acpi.h"
+#include "myacpi.h"
 
-int
-mmap_phys_acpi_header(uintptr_t base_addr, struct acpi_header **ptr_to_header,
-                      void **virt_addr, int fd)
-{
-  /* The memory mapping must be done aligned to page size
-   * but we have a known physical address we want to inspect,
-   * therefore we must compute offsets.
-   */
-  uintptr_t pa_acpi = base_addr & ~(sysconf(_SC_PAGE_SIZE) - 1);
-  uintptr_t pa_start = base_addr - pa_acpi;
-
-  /* Map the ACPI table at the nearest page (rounded down) */
-  *virt_addr = 0;
-  *virt_addr = mmap(NULL, ESCD_SIZE, PROT_READ, MAP_SHARED | MAP_FIXED,
-                    fd, (off_t) pa_acpi);
-
-  if (*virt_addr == MAP_FAILED)
-    return errno;
-
-  /* Fabricate a pointer to our magic address */
-  *ptr_to_header = (struct acpi_header *)(*virt_addr + pa_start);
-
-  return 0;
-}
+#define __KERNEL__
+#include <acpi/acpi.h>
 
 int
 acpi_get_num_tables(size_t *num_tables)
 {
-  int fd_mem;
-  int err;
-  void *virt_addr, *virt_addr2;
+  void *virt_addr;
   bool found = false;
   struct rsdp_descr2 rsdp = { 0 };
   uintptr_t sdt_base = (uintptr_t)0;
@@ -69,11 +45,7 @@ acpi_get_num_tables(size_t *num_tables)
   struct acpi_header *root_sdt;
   struct acpi_header *next;
 
-  if ((fd_mem = open("/dev/mem", O_RDWR)) < 0)
-    return EPERM;
-
-  virt_addr = mmap(NULL, ESCD_SIZE, PROT_READ,
-                   MAP_SHARED | MAP_FIXED, fd_mem, ESCD);
+  virt_addr = acpi_os_map_memory(ESCD, ESCD_SIZE);
   if (virt_addr == MAP_FAILED)
     return errno;
 
@@ -91,7 +63,7 @@ acpi_get_num_tables(size_t *num_tables)
     }
 
   if (!found) {
-    munmap(virt_addr, ESCD_SIZE);
+    acpi_os_unmap_memory(virt_addr, ESCD_SIZE);
     return ENODEV;
   }
 
@@ -104,19 +76,17 @@ acpi_get_num_tables(size_t *num_tables)
     sdt_base = rsdp.xsdt_addr;
     is_64bit = true;
   } else {
-    munmap(virt_addr, ESCD_SIZE);
+    acpi_os_unmap_memory(virt_addr, ESCD_SIZE);
     return ENODEV;
   }
 
-  munmap(virt_addr, ESCD_SIZE);
+  acpi_os_unmap_memory(virt_addr, ESCD_SIZE);
 
   /* Now we have the sdt_base address and knowledge of 32/64 bit ACPI */
 
-  err = mmap_phys_acpi_header(sdt_base, &root_sdt, &virt_addr, fd_mem);
-  if (err) {
-    munmap(virt_addr, ESCD_SIZE);
-    return err;
-  }
+  root_sdt = acpi_os_map_memory(sdt_base, ESCD_SIZE);
+  if (root_sdt == MAP_FAILED)
+    return errno;
 
   /* Get total tables */
   uint32_t ntables;
@@ -125,31 +95,34 @@ acpi_get_num_tables(size_t *num_tables)
   ntables = (root_sdt->length - sizeof(*root_sdt)) / sz_ptr;
 
   /* Get pointer to first ACPI table */
-  uintptr_t acpi_ptr = (uintptr_t)root_sdt + sizeof(*root_sdt);
+  void *acpi_ptr = (void*)root_sdt + sizeof(*root_sdt);
 
   /* Get number of readable tables */
   *num_tables = 0;
   for (int i = 0; i < ntables; i++)
     {
-      uintptr_t acpi_ptr32 = (uintptr_t)*((uint32_t *)(acpi_ptr + i*sz_ptr));
-      uintptr_t acpi_ptr64 = (uintptr_t)*((uint64_t *)(acpi_ptr + i*sz_ptr));
       if (is_64bit) {
-        err = mmap_phys_acpi_header(acpi_ptr64, &next, &virt_addr2, fd_mem);
+        uint64_t acpi_ptr64;
+        memcpy(&acpi_ptr64, acpi_ptr + i*sz_ptr, sizeof(acpi_ptr64));
+        next = acpi_os_map_memory(acpi_ptr64, ESCD_SIZE);
       } else {
-        err = mmap_phys_acpi_header(acpi_ptr32, &next, &virt_addr2, fd_mem);
+        uint32_t acpi_ptr32;
+        memcpy(&acpi_ptr32, acpi_ptr + i*sz_ptr, sizeof(acpi_ptr32));
+        next = acpi_os_map_memory(acpi_ptr32, ESCD_SIZE);
       }
 
-      char name[5] = { 0 };
-      snprintf(name, 5, "%s", &next->signature[0]);
+      if (next == MAP_FAILED)
+        return errno;
+
       if (next->signature[0] == '\0' || next->length == 0) {
-        munmap(virt_addr2, ESCD_SIZE);
+        acpi_os_unmap_memory(next, ESCD_SIZE);
         continue;
       }
       *num_tables += 1;
-      munmap(virt_addr2, ESCD_SIZE);
+      acpi_os_unmap_memory(next, ESCD_SIZE);
     }
 
-  munmap(virt_addr, ESCD_SIZE);
+  acpi_os_unmap_memory(root_sdt, ESCD_SIZE);
 
   return 0;
 }
@@ -158,9 +131,7 @@ int
 acpi_get_tables(struct acpi_table **tables)
 {
   int err;
-  int fd_mem;
-  void *virt_addr, *virt_addr2;
-  uint32_t phys_addr = ESCD;
+  void *virt_addr;
   bool found = false;
   struct rsdp_descr2 rsdp = { 0 };
   uintptr_t sdt_base = (uintptr_t)0;
@@ -179,12 +150,7 @@ acpi_get_tables(struct acpi_table **tables)
   if (!*tables)
     return ENOMEM;
 
-  if ((fd_mem = open("/dev/mem", O_RDWR)) < 0)
-    return EPERM;
-
-  virt_addr = mmap(NULL, ESCD_SIZE, PROT_READ, MAP_SHARED | MAP_FIXED,
-                   fd_mem, (off_t) phys_addr);
-
+  virt_addr = acpi_os_map_memory(ESCD, ESCD_SIZE);
   if (virt_addr == MAP_FAILED)
     return errno;
 
@@ -202,7 +168,7 @@ acpi_get_tables(struct acpi_table **tables)
     }
 
   if (!found) {
-    munmap(virt_addr, ESCD_SIZE);
+    acpi_os_unmap_memory(virt_addr, ESCD_SIZE);
     return ENODEV;
   }
 
@@ -215,19 +181,17 @@ acpi_get_tables(struct acpi_table **tables)
     sdt_base = rsdp.xsdt_addr;
     is_64bit = true;
   } else {
-    munmap(virt_addr, ESCD_SIZE);
+    acpi_os_unmap_memory(virt_addr, ESCD_SIZE);
     return ENODEV;
   }
 
-  munmap(virt_addr, ESCD_SIZE);
+  acpi_os_unmap_memory(virt_addr, ESCD_SIZE);
 
   /* Now we have the sdt_base address and knowledge of 32/64 bit ACPI */
 
-  err = mmap_phys_acpi_header(sdt_base, &root_sdt, &virt_addr, fd_mem);
-  if (err) {
-    munmap(virt_addr, ESCD_SIZE);
-    return err;
-  }
+  root_sdt = acpi_os_map_memory(sdt_base, ESCD_SIZE);
+  if (root_sdt == MAP_FAILED)
+    return errno;
 
   /* Get total tables */
   uint32_t ntables;
@@ -236,31 +200,26 @@ acpi_get_tables(struct acpi_table **tables)
   ntables = (root_sdt->length - sizeof(*root_sdt)) / sz_ptr;
 
   /* Get pointer to first ACPI table */
-  uintptr_t acpi_ptr = (uintptr_t)root_sdt + sizeof(*root_sdt);
+  void *acpi_ptr = (void*)root_sdt + sizeof(*root_sdt);
 
   /* Get all tables and data */
   for (int i = 0; i < ntables; i++)
     {
-      uintptr_t acpi_ptr32 = (uintptr_t)*((uint32_t *)(acpi_ptr + i*sz_ptr));
-      uintptr_t acpi_ptr64 = (uintptr_t)*((uint64_t *)(acpi_ptr + i*sz_ptr));
       if (is_64bit) {
-        err = mmap_phys_acpi_header(acpi_ptr64, &next, &virt_addr2, fd_mem);
-        if (err) {
-          munmap(virt_addr, ESCD_SIZE);
-          return err;
-        }
+        uint64_t acpi_ptr64;
+        memcpy(&acpi_ptr64, acpi_ptr + i*sz_ptr, sizeof(acpi_ptr64));
+        next = acpi_os_map_memory(acpi_ptr64, ESCD_SIZE);
       } else {
-        err = mmap_phys_acpi_header(acpi_ptr32, &next, &virt_addr2, fd_mem);
-        if (err) {
-          munmap(virt_addr, ESCD_SIZE);
-          return err;
-        }
+        uint32_t acpi_ptr32;
+        memcpy(&acpi_ptr32, acpi_ptr + i*sz_ptr, sizeof(acpi_ptr32));
+        next = acpi_os_map_memory(acpi_ptr32, ESCD_SIZE);
       }
 
-      char name[5] = { 0 };
-      snprintf(name, 5, "%s", &next->signature[0]);
+      if (next == MAP_FAILED)
+        return errno;
+
       if (next->signature[0] == '\0' || next->length == 0) {
-        munmap(virt_addr2, ESCD_SIZE);
+        acpi_os_unmap_memory(next, ESCD_SIZE);
         continue;
       }
       uint32_t datalen = next->length - sizeof(*next);
@@ -274,17 +233,17 @@ acpi_get_tables(struct acpi_table **tables)
       t->datalen = 0;
       t->data = malloc(datalen);
       if (!t->data) {
-        munmap(virt_addr2, ESCD_SIZE);
-        munmap(virt_addr, ESCD_SIZE);
+        acpi_os_unmap_memory(next, ESCD_SIZE);
+        acpi_os_unmap_memory(root_sdt, ESCD_SIZE);
         return ENOMEM;
       }
       t->datalen = datalen;
       memcpy(t->data, data, datalen);
       cur_tab++;
-      munmap(virt_addr2, ESCD_SIZE);
+      acpi_os_unmap_memory(next, ESCD_SIZE);
     }
 
-  munmap(virt_addr, ESCD_SIZE);
+  acpi_os_unmap_memory(root_sdt, ESCD_SIZE);
 
   return 0;
 }

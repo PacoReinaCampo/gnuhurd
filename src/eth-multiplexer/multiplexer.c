@@ -44,7 +44,7 @@
 #include "ethernet.h"
 #include "vdev.h"
 #include "device_S.h"
-#include "notify_S.h"
+#include "libports/notify_S.h"
 #include "bpf_impl.h"
 #include "netfs_impl.h"
 #include "util.h"
@@ -66,7 +66,6 @@ static const struct argp_option options[] =
 struct port_bucket *port_bucket;
 struct port_class *other_portclass;
 struct port_class *vdev_portclass;
-struct port_info *notify_pi;
 
 int netfs_maxsymlinks = 12;
 char *netfs_server_name = "multiplexer";
@@ -83,7 +82,7 @@ multiplexer_demuxer (mach_msg_header_t *inp,
   mig_routine_t routine;
   if ((routine = NULL, ethernet_demuxer (inp, outp)) ||
       (routine = device_server_routine (inp)) ||
-      (routine = notify_server_routine (inp)))
+      (routine = ports_notify_server_routine (inp)))
     {
       if (routine)
         (*routine) (inp, outp);
@@ -96,6 +95,8 @@ multiplexer_demuxer (mach_msg_header_t *inp,
 static void *
 multiplexer_thread (void *arg)
 {
+  pthread_setname_np (pthread_self (), "demuxer");
+
   ports_manage_port_operations_one_thread (port_bucket,
 					   multiplexer_demuxer,
 					   0);
@@ -145,12 +146,6 @@ main (int argc, char *argv[])
       ethernet_open (device_file, master_device, port_bucket,
 		     other_portclass);
     }
-
-  /* Prepare for the notification. */
-  err = ports_create_port (other_portclass, port_bucket,
-			   sizeof (struct port_info), &notify_pi);
-  if (err)
-    error (1, err, "ports_create_port for notification");
 
   task_get_bootstrap_port (mach_task_self (), &bootstrap);
   if (bootstrap == MACH_PORT_NULL)

@@ -24,9 +24,9 @@
 #include <mach.h>
 #include <string.h>
 #include <strings.h>
+#include <stdlib.h>
 
 #include "default_pager.h"
-#include "kalloc.h"
 
 #include "file_io.h"
 #include "default_pager_S.h"
@@ -40,15 +40,15 @@ int page_aligned (vm_offset_t num)
 extern mach_port_t default_pager_default_port; /* default_pager.c */
 
 kern_return_t
-S_default_pager_paging_storage (mach_port_t pager,
+S_default_pager_paging_storage_new (mach_port_t pager,
 				mach_port_t device,
-				recnum_t *runs, mach_msg_type_number_t nrun,
-				default_pager_filename_t name,
+				const recnum_t *runs, mach_msg_type_number_t nrun,
+				const_default_pager_filename_t name,
 				boolean_t add)
 {
   struct file_direct *fdp;
   int sizes[DEV_GET_RECORDS_COUNT];
-  natural_t count;
+  mach_msg_type_number_t count;
   mach_msg_type_number_t i;
   error_t err;
   recnum_t devsize;
@@ -74,7 +74,7 @@ S_default_pager_paging_storage (mach_port_t pager,
     /* We can't write disk blocks larger than pages.  */
     return EINVAL;
 
-  fdp = kalloc (offsetof (struct file_direct, runs[nrun]));
+  fdp = malloc (offsetof (struct file_direct, runs[nrun]));
   if (fdp == 0)
     return ENOMEM;
 
@@ -89,7 +89,7 @@ S_default_pager_paging_storage (mach_port_t pager,
       fdp->runs[i].length = runs[i + 1];
       if (fdp->runs[i].start + fdp->runs[i].length > devsize)
 	{
-	  kfree (fdp, offsetof (struct file_direct, runs[nrun]));
+	  free (fdp);
 	  return EINVAL;
 	}
       fdp->fd_size += fdp->runs[i].length;
@@ -100,6 +100,18 @@ S_default_pager_paging_storage (mach_port_t pager,
   return 0;
 }
 
+#ifdef __i386__
+kern_return_t
+S_default_pager_paging_storage (mach_port_t pager,
+				mach_port_t device,
+				const recnum_t *runs, mach_msg_type_number_t nrun,
+				const_default_pager_filename_t name,
+				boolean_t add)
+{
+  return S_default_pager_paging_storage_new (pager, device, runs, nrun, name,
+                                             add);
+}
+#endif
 
 /* Called to read a page from backing store.  */
 int
@@ -107,7 +119,7 @@ page_read_file_direct (struct file_direct *fdp,
 		       vm_offset_t offset,
 		       vm_size_t size,
 		       vm_offset_t *addr,	/* out */
-		       vm_size_t *size_read)	/* out */
+		       mach_msg_type_number_t *size_read)	/* out */
 {
   struct storage_run *r;
   error_t err;
@@ -173,7 +185,7 @@ page_write_file_direct(struct file_direct *fdp,
 		       vm_offset_t offset,
 		       vm_offset_t addr,
 		       vm_size_t size,
-		       vm_size_t *size_written)	/* out */
+		       mach_msg_type_number_t *size_written)	/* out */
 {
   struct storage_run *r;
   error_t err;
@@ -237,62 +249,11 @@ page_write_file_direct(struct file_direct *fdp,
 }
 
 
-/* Compatibility entry points used by default_pager_paging_file RPC.  */
-
-kern_return_t
-add_paging_file(master_device_port, file_name, linux_signature)
-	mach_port_t		master_device_port;
-	char			*file_name;
-	int			linux_signature;
-{
-  error_t err;
-  mach_port_t dev;
-  int sizes[DEV_GET_SIZE_COUNT];
-  natural_t count;
-  char *devname = file_name;
-
-  assert_backtrace (linux_signature == 0);
-
-  if (!strncmp (file_name, "/dev/", 5))
-    devname += 5;
-
-  err = device_open (master_device_port, D_READ|D_WRITE, devname, &dev);
-  if (err)
-    return err;
-
-  count = DEV_GET_SIZE_COUNT;
-  err = device_get_status (dev, DEV_GET_SIZE, sizes, &count);
-  if (!err && count < DEV_GET_SIZE_COUNT)
-    err = EGRATUITOUS;
-  if (err)
-    mach_port_deallocate (mach_task_self (), dev);
-  else
-    {
-      struct file_direct *fdp;
-      fdp = kalloc (offsetof (struct file_direct, runs[1]));
-      if (fdp == 0)
-	return ENOMEM;
-
-      fdp->device = dev;
-      fdp->fd_bsize = sizes[DEV_GET_SIZE_RECORD_SIZE];
-      fdp->bshift = ffs (sizes[DEV_GET_SIZE_RECORD_SIZE]) - 1;
-      fdp->fd_size = sizes[DEV_GET_SIZE_DEVICE_SIZE] >> fdp->bshift;
-      fdp->nruns = 1;
-      fdp->runs[0].start = 0;
-      fdp->runs[0].length = fdp->fd_size;
-
-      /* Now really do it.  */
-      create_paging_partition (file_name, fdp, 0, 0);
-    }
-
-  return err;
-}
-
 /*
  * Destroy a paging_partition given a file name
  */
 kern_return_t
-remove_paging_file (char *file_name)
+remove_paging_file (const char *file_name)
 {
   struct file_direct *fdp = 0;
   kern_return_t kr;
@@ -301,7 +262,7 @@ remove_paging_file (char *file_name)
   if (kr == KERN_SUCCESS && fdp != 0)
     {
       mach_port_deallocate (mach_task_self (), fdp->device);
-      kfree (fdp, (char *) &fdp->runs[fdp->nruns] - (char *) fdp);
+      free (fdp);
     }
   return kr;
 }

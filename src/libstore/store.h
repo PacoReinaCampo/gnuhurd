@@ -127,13 +127,12 @@ struct store
 
 typedef error_t (*store_write_meth_t)(struct store *store,
 				      store_offset_t addr, size_t index,
-				      const void *buf,
-				      mach_msg_type_number_t len,
-				      mach_msg_type_number_t *amount);
+				      const void *buf, size_t len,
+				      size_t *amount);
 typedef error_t (*store_read_meth_t)(struct store *store,
 				     store_offset_t addr, size_t index,
-				     mach_msg_type_number_t amount,
-				     void **buf, mach_msg_type_number_t *len);
+				     size_t amount,
+				     void **buf, size_t *len);
 typedef error_t (*store_set_size_meth_t)(struct store *store,
 					 size_t newsize);
 
@@ -208,6 +207,9 @@ struct store_class
 
   /* Return a memory object paging on STORE.  */
   error_t (*map) (const struct store *store, vm_prot_t prot, mach_port_t *memobj);
+
+  /* Sync any cached writes to permanent storage. */
+  error_t (*sync) (struct store *store);
 };
 
 /* Return a new store in STORE, which refers to the storage underlying
@@ -319,6 +321,9 @@ error_t store_read (struct store *store,
 
 /* Set STORE's size to NEWSIZE (in bytes).  */
 error_t store_set_size (struct store *store, size_t newsize);
+
+/* Ensure all writes to STORE are on permanent storage. */
+error_t store_sync (struct store *store);
 
 /* If STORE was created using store_create, remove the reference to the
    source from which it was created.  */
@@ -700,7 +705,7 @@ error_t store_return (const struct store *store,
 /* Encode STORE into ENC, which should have been prepared with
    store_enc_init, or return an error.  The contents of ENC may then be
    return as the value of file_get_storage_info; if for some reason this
-   can't be done, store_enc_dealloc may be used to deallocate the mmemory
+   can't be done, store_enc_dealloc may be used to deallocate the memory
    used by the unsent vectors.  */
 error_t store_encode (const struct store *store, struct store_enc *enc);
 

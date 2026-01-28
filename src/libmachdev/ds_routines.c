@@ -62,13 +62,14 @@
 #include <string.h>
 #include <error.h>
 #include <assert.h>
+#include <pthread.h>
 
 #include <hurd.h>
 #include <mach.h>
 #include <device/device.h> /* fallback to kernel device */
 
 #include "device_S.h"
-#include "notify_S.h"
+#include "libports/notify_S.h"
 #include "machdev-dev_hdr.h"
 #include "machdev.h"
 #include "mach_device.h"
@@ -82,8 +83,6 @@ struct port_class *machdev_device_class;
 static struct machdev_device_emulation_ops *emulation_list[MAX_NUM_EMULATION];
 static int num_emul = 0;
 
-boolean_t machdev_is_master_device (mach_port_t port);
-
 /*
  * What follows is the interface for the native Mach devices.
  */
@@ -92,7 +91,8 @@ boolean_t machdev_is_master_device (mach_port_t port);
 io_return_t
 ds_device_open (mach_port_t open_port, mach_port_t reply_port,
                 mach_msg_type_name_t reply_port_type, dev_mode_t mode,
-                char *name, device_t *devp, mach_msg_type_name_t *devicePoly)
+                const_dev_name_t name, device_t *devp,
+                mach_msg_type_name_t *devicePoly)
 {
   int i;
   mach_port_t dev_master;
@@ -118,11 +118,26 @@ ds_device_open (mach_port_t open_port, mach_port_t reply_port,
   /* Fall back to opening kernel device master */
   if (err)
     {
-      get_privileged_ports(NULL, &dev_master);
-      err = device_open (dev_master, mode, name, devp);
-      *devicePoly = MACH_MSG_TYPE_MOVE_SEND;
+      err = get_privileged_ports(NULL, &dev_master);
+      if (!err)
+	{
+	  err = device_open (dev_master, mode, name, devp);
+	  mach_port_deallocate (mach_task_self (), dev_master);
+	}
+      if (!err)
+        *devicePoly = MACH_MSG_TYPE_MOVE_SEND;
     }
   return err;
+}
+
+io_return_t
+ds_device_open_new (mach_port_t open_port, mach_port_t reply_port,
+                    mach_msg_type_name_t reply_port_type, dev_mode_t mode,
+                    const_dev_name_t name, device_t *devp,
+                    mach_msg_type_name_t *devicePoly)
+{
+  return ds_device_open (open_port, reply_port, reply_port_type, mode,
+      name, devp, devicePoly);
 }
 
 io_return_t
@@ -162,7 +177,7 @@ io_return_t
 ds_device_write_inband (struct mach_device *device, mach_port_t reply_port,
 			mach_msg_type_name_t reply_port_type,
 			dev_mode_t mode, recnum_t recnum,
-			io_buf_ptr_inband_t data, unsigned count,
+			const io_buf_ptr_inband_t data, unsigned count,
 			int *bytes_written)
 {
   /* Refuse if device is dead or not completely open.  */
@@ -203,7 +218,7 @@ ds_device_read (struct mach_device *device, mach_port_t reply_port,
 io_return_t
 ds_device_read_inband (struct mach_device *device, mach_port_t reply_port,
 		       mach_msg_type_name_t reply_port_type, dev_mode_t mode,
-		       recnum_t recnum, int count, char *data,
+		       recnum_t recnum, int count, io_buf_ptr_inband_t data,
 		       unsigned *bytes_read)
 {
   /* Refuse if device is dead or not completely open.  */
@@ -303,7 +318,8 @@ machdev_create_device_port (size_t size, void *result)
 			    size, result);
 }
 
-void machdev_device_init()
+void
+machdev_device_init(void)
 {
   int i;
 
@@ -317,22 +333,23 @@ void machdev_device_init()
     }
 }
 
-void machdev_device_shutdown()
+void
+machdev_device_sync(void)
 {
   int i;
   for (i = 0; i < num_emul; i++)
     {
-      if (emulation_list[i]->shutdown)
-        emulation_list[i]->shutdown();
+      if (emulation_list[i]->sync)
+        emulation_list[i]->sync();
     }
 }
 
-static int
-demuxer (mach_msg_header_t *inp, mach_msg_header_t *outp)
+int
+machdev_demuxer (mach_msg_header_t *inp, mach_msg_header_t *outp)
 {
   mig_routine_t routine;
   if ((routine = device_server_routine (inp)) ||
-      (routine = notify_server_routine (inp)))
+      (routine = ports_notify_server_routine (inp)))
     {
       (*routine) (inp, outp);
       return TRUE;
@@ -341,18 +358,22 @@ demuxer (mach_msg_header_t *inp, mach_msg_header_t *outp)
     return FALSE;
 }
 
-void machdev_register (struct machdev_device_emulation_ops *ops)
+void
+machdev_register (struct machdev_device_emulation_ops *ops)
 {
   assert(num_emul < MAX_NUM_EMULATION-1);
   emulation_list[num_emul++] = ops;
 }
 
-void * machdev_server(void *arg)
+void *
+machdev_server(void *arg)
 {
+  pthread_setname_np (pthread_self (), "machdev_server");
+
   /* Launch.  */
   do
     {
-      ports_manage_port_operations_one_thread (machdev_device_bucket, demuxer, 0);
+      ports_manage_port_operations_one_thread (machdev_device_bucket, machdev_demuxer, 0);
     } while (1);
 
   return NULL;

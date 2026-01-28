@@ -46,35 +46,39 @@ static int dev_num;
  * TODO every device structure should has its own lock to protect itself. */
 static pthread_mutex_t dev_list_lock = PTHREAD_MUTEX_INITIALIZER;
 
-mach_msg_type_t header_type =
+/* Should match MiG's desired_complex_alignof */
+#define MSG_ALIGNMENT __alignof__(uintptr_t)
+
+static const mach_msg_type_t header_type =
 {
-  MACH_MSG_TYPE_BYTE,
-  8,
-  NET_HDW_HDR_MAX,
-  TRUE,
-  FALSE,
-  FALSE,
-  0
+  .msgt_name = MACH_MSG_TYPE_BYTE,
+  .msgt_size = 8,
+  .msgt_number = NET_HDW_HDR_MAX,
+  .msgt_inline = TRUE,
+  .msgt_longform = FALSE,
+  .msgt_deallocate = FALSE,
+  .msgt_unused = 0
 };
 
-mach_msg_type_t packet_type =
+static const mach_msg_type_t packet_type =
 {
-  MACH_MSG_TYPE_BYTE,	/* name */
-  8,			/* size */
-  0,			/* number */
-  TRUE,			/* inline */
-  FALSE,			/* longform */
-  FALSE			/* deallocate */
+  .msgt_name = MACH_MSG_TYPE_BYTE,
+  .msgt_size = 8,
+  .msgt_number = 0,
+  .msgt_inline = TRUE,
+  .msgt_longform = FALSE,
+  .msgt_deallocate = FALSE,
+  .msgt_unused = 0
 };
 
 int
-get_dev_num ()
+get_dev_num (void)
 {
   return dev_num;
 }
 
 struct vether_device *
-lookup_dev_by_name (char *name)
+lookup_dev_by_name (const char *name)
 {
   struct vether_device *vdev;
   pthread_mutex_lock (&dev_list_lock);
@@ -139,7 +143,8 @@ add_vdev (char *name, size_t size)
 
   vdev->dev_port = ports_get_right (vdev);
   ports_port_deref (vdev);
-  strncpy (vdev->name, name, IFNAMSIZ);
+  strncpy (vdev->name, name, IFNAMSIZ-1);
+  vdev->name[IFNAMSIZ-1] = '\0';
   vdev->if_header_size = ETH_HLEN;
   vdev->if_mtu = ETH_MTU;
   vdev->if_header_format = HDR_ETHERNET;
@@ -207,8 +212,9 @@ broadcast_pack (char *data, int datalen, struct vether_device *from_vdev)
 
   pack_size = datalen - sizeof (struct ethhdr);
   /* remember message sizes must be rounded up */
-  msg.msg_hdr.msgh_size = (((mach_msg_size_t) (sizeof(struct net_rcv_msg)
-					       - NET_RCV_MAX + pack_size)) + 3) & ~3;
+  msg.msg_hdr.msgh_size = sizeof (struct net_rcv_msg) - NET_RCV_MAX + pack_size;
+  msg.msg_hdr.msgh_size = (mach_msg_size_t) ((msg.msg_hdr.msgh_size +
+      MSG_ALIGNMENT - 1) & ~(MSG_ALIGNMENT - 1));
 
   header = (struct ethhdr *) msg.header;
   packet = (struct packet_header *) msg.packet;
@@ -270,7 +276,7 @@ deliver_msg(struct net_rcv_msg *msg, struct vether_device *vdev)
   msg->msg_hdr.msgh_bits = MACH_MSGH_BITS (MACH_MSG_TYPE_COPY_SEND, 0);
   /* remember message sizes must be rounded up */
   msg->msg_hdr.msgh_local_port = MACH_PORT_NULL;
-  msg->msg_hdr.msgh_kind = MACH_MSGH_KIND_NORMAL;
+  msg->msg_hdr.msgh_seqno = 0;
   msg->msg_hdr.msgh_id = NET_RCV_MSG_ID;
 
   if_port_list = &vdev->port_list.if_rcv_port_list;

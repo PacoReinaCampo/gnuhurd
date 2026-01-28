@@ -22,6 +22,7 @@
 #include <string.h>
 #include <inttypes.h>
 #include <error.h>
+#include <pthread.h>
 
 #include "tmpfs.h"
 #include <limits.h>
@@ -39,7 +40,7 @@ char *diskfs_disk_name = "none";
 int diskfs_default_sync_interval = 0;
 
 /* We must supply some claimed limits, though we don't impose any new ones.  */
-int diskfs_link_max = (1ULL << (sizeof (nlink_t) * CHAR_BIT)) - 1;
+int diskfs_link_max = INT_MAX;
 int diskfs_name_max = 255;	/* dirent d_namlen limit */
 int diskfs_maxsymlinks = 8;
 
@@ -91,7 +92,7 @@ diskfs_sync_everything (int wait)
 }
 
 error_t
-diskfs_reload_global_state ()
+diskfs_reload_global_state (void)
 {
   return 0;
 }
@@ -282,20 +283,22 @@ diskfs_append_args (char **argz, size_t *argz_len)
 #define S(n, c) if ((lim & ((1 << n) - 1)) == 0) sfx = c, lim >>= n
       S (30, 'G'); else S (20, 'M'); else S (10, 'K'); else sfx = '\0';
 #undef S
-      snprintf (buf, sizeof buf, "%Ld%c", lim, sfx);
+      snprintf (buf, sizeof buf, "%" PRIi64 "%c", lim, sfx);
       err = argz_add (argz, argz_len, buf);
     }
 
   return err;
 }
 
-/* Handling of operations for the ports in diskfs_port_bucket, calling 
+/* Handling of operations for the ports in diskfs_port_bucket, calling
  * demuxer for each incoming message */
 static void *
 diskfs_thread_function (void *demuxer)
 {
   static int thread_timeout = 1000 * 60 * 2; /* two minutes */
   error_t err;
+
+  pthread_setname_np (pthread_self (), "diskfs");
 
   do
     {
@@ -361,9 +364,25 @@ main (int argc, char **argv)
   else
     {
       err = vm_set_default_memory_manager (host_priv, &default_pager);
-      mach_port_deallocate (mach_task_self (), host_priv);
       if (err)
 	error (0, err, "Cannot get default pager port");
+      else
+	if (default_pager == MACH_PORT_NULL)
+	  {
+	    error (0, 0, "No default pager (memory manager) is running");
+	    /* Try to auto-start it.  */
+	    err = system ("/hurd/mach-defpager");
+	    if (err)
+	      error (0, err, "Could not start it");
+	    else
+	      {
+		fprintf (stderr, "Started it\n");
+		err = vm_set_default_memory_manager (host_priv, &default_pager);
+		if (err)
+		  error(0, err, "Cannot get default pager port");
+	      }
+	  }
+      mach_port_deallocate (mach_task_self (), host_priv);
     }
   if (default_pager == MACH_PORT_NULL)
     error (0, 0, "files cannot have contents with no default pager port");

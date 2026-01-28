@@ -240,7 +240,7 @@ force_delayed_copies (struct node *node, off_t length)
       mach_port_t obj;
 
       pager_change_attributes (pager, MAY_CACHE, MEMORY_OBJECT_COPY_NONE, 1);
-      obj = diskfs_get_filemap (node, VM_PROT_READ);
+      obj = diskfs_get_filemap (node, VM_PROT_READ | VM_PROT_WRITE);
       if (obj != MACH_PORT_NULL)
 	{
 	  /* XXX should cope with errors from diskfs_get_filemap */
@@ -291,11 +291,26 @@ diskfs_truncate (struct node *node, off_t length)
   if (length >= node->dn_stat.st_size)
     return 0;
 
-  if (! node->dn_stat.st_blocks)
+  if (! node->dn_stat.st_blocks
+      && !S_ISREG (node->dn_stat.st_mode)
+      && !S_ISDIR (node->dn_stat.st_mode))
     /* There aren't really any blocks allocated, so just frob the size.  This
        is true for fast symlinks, and also apparently for some device nodes
        in linux.  */
     {
+      off_t froblen = node->dn_stat.st_size;
+      off_t frobmax = sizeof(diskfs_node_disknode (node)->info.i_data);
+
+      if (froblen > frobmax)
+	{
+	  ext2_warning ("inline data was %lld, more than max %lld",
+	      (long long) froblen, (long long) frobmax);
+	  froblen = frobmax;
+	}
+      froblen -= length;
+      memset (((char *) (diskfs_node_disknode (node)->info.i_data)) + length,
+	      0, froblen);
+
       node->dn_stat.st_size = length;
       node->dn_set_mtime = 1;
       node->dn_set_ctime = 1;

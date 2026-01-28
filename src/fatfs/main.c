@@ -110,7 +110,7 @@ struct argp *diskfs_runtime_argp = (struct argp *) &runtime_argp;
 /* Override the standard diskfs routine so we can add our own
    output.  */
 error_t
-diskfs_append_args (char **argz, unsigned *argz_len)
+diskfs_append_args (char **argz, size_t *argz_len)
 {
   error_t err;
   char buf[100];
@@ -139,7 +139,7 @@ diskfs_append_args (char **argz, unsigned *argz_len)
 
 /* Fetch the root node.  */
 static void
-fetch_root ()
+fetch_root (void)
 {
   error_t err;
   ino_t inum;
@@ -248,7 +248,7 @@ main (int argc, char **argv)
 
 /* Nothing to do for read-only medium.  */
 error_t
-diskfs_reload_global_state ()
+diskfs_reload_global_state (void)
 {
   return 0;
 }
@@ -270,12 +270,12 @@ diskfs_readonly_changed (int readonly)
 
 /* FIXME: libdiskfs doesn't lock the parent dir when looking up a node
    for fsys_getfile, so we disable NFS.  */
-error_t
+kern_return_t
 diskfs_S_fsys_getfile (struct diskfs_control *pt,
                       mach_port_t reply, mach_msg_type_name_t reply_type,
-                      uid_t *uids, mach_msg_type_number_t nuids,
-                      gid_t *gids, mach_msg_type_number_t ngids,
-                      data_t handle, mach_msg_type_number_t handle_len,
+                      const uid_t *uids, mach_msg_type_number_t nuids,
+                      const gid_t *gids, mach_msg_type_number_t ngids,
+                      const_data_t handle, mach_msg_type_number_t handle_len,
                       mach_port_t *file, mach_msg_type_name_t *file_type)
 {
   return EOPNOTSUPP;

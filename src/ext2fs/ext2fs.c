@@ -28,6 +28,7 @@
 #include <error.h>
 #include <argz.h>
 #include <argp.h>
+#include <inttypes.h>
 #include <hurd/store.h>
 #include <version.h>
 #include "ext2fs.h"
@@ -61,6 +62,7 @@ pthread_spinlock_t modified_global_blocks_lock = PTHREAD_SPINLOCK_INITIALIZER;
 
 struct ext2_super_block *sblock;
 int sblock_dirty;
+uint16_t global_inode_size;
 
 unsigned int block_size;
 unsigned int log2_block_size;
@@ -88,15 +90,14 @@ struct ext2_group_desc *group_desc_image;
 
 struct pokel global_pokel;
 
-int use_xattr_translator_records;
 
 #ifdef EXT2FS_DEBUG
 int ext2_debug_flag;
 #endif
 
 /* Use extended attribute-based translator records.  */
-int use_xattr_translator_records;
-#define X_XATTR_TRANSLATOR_RECORDS	-1
+int use_xattr_translator_records = 1;
+#define NO_XATTR_TRANSLATOR_RECORDS	-1
 
 /* Ext2fs-specific options.  */
 static const struct argp_option
@@ -107,8 +108,8 @@ options[] =
    " (not compiled in)"
 #endif
   },
-  {"x-xattr-translator-records", X_XATTR_TRANSLATOR_RECORDS, 0, 0,
-   "Store translator records in extended attributes (experimental)"},
+  {"no-xattr-translator-records", NO_XATTR_TRANSLATOR_RECORDS, 0, 0,
+   "Do not store translator records in extended attributes (legacy)"},
 #ifdef ALTERNATE_SBLOCK
   /* XXX This is not implemented.  */
   {"sblock", 'S', "BLOCKNO", 0,
@@ -137,8 +138,8 @@ parse_opt (int key, char *arg, struct argp_state *state)
     case 'D':
       values->debug_flag = 1;
       break;
-    case X_XATTR_TRANSLATOR_RECORDS:
-      values->use_xattr_translator_records = 1;
+    case NO_XATTR_TRANSLATOR_RECORDS:
+      values->use_xattr_translator_records = 0;
       break;
 #ifdef ALTERNATE_SBLOCK
     case 'S':
@@ -158,6 +159,7 @@ parse_opt (int key, char *arg, struct argp_state *state)
 	return ENOMEM;
       state->hook = values;
       memset (values, 0, sizeof *values);
+      values->use_xattr_translator_records = use_xattr_translator_records;
 #ifdef ALTERNATE_SBLOCK
       values->sb_block = SBLOCK_BLOCK;
 #endif
@@ -193,8 +195,8 @@ diskfs_append_args (char **argz, size_t *argz_len)
   /* Get the standard things.  */
   err = diskfs_append_std_options (argz, argz_len);
 
-  if (!err && use_xattr_translator_records)
-    err = argz_add (argz, argz_len, "--x-xattr-translator-records");
+  if (!err && !use_xattr_translator_records)
+    err = argz_add (argz, argz_len, "--no-xattr-translator-records");
 
 #ifdef EXT2FS_DEBUG
   if (!err && ext2_debug_flag)
@@ -230,10 +232,10 @@ main (int argc, char **argv)
 			    &store_parsed, &bootstrap);
 
   if (store->size < SBLOCK_OFFS + SBLOCK_SIZE)
-    ext2_panic ("device too small for superblock (%Ld bytes)", store->size);
+    ext2_panic ("device too small for superblock (%" PRIi64 " bytes)", store->size);
   if (store->log2_blocks_per_page < 0)
-    ext2_panic ("device block size (%zu) greater than page size (%zd)",
-		store->block_size, vm_page_size);
+    ext2_panic ("device block size (%zu) greater than page size (%lu)",
+		store->block_size, (unsigned long)vm_page_size);
 
   /* Map the entire disk. */
   create_disk_pager ();
@@ -262,7 +264,7 @@ main (int argc, char **argv)
 }
 
 error_t
-diskfs_reload_global_state ()
+diskfs_reload_global_state (void)
 {
   error_t err;
 

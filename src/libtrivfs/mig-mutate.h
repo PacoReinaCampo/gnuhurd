@@ -1,4 +1,5 @@
-/*
+/* MIG type translation information
+
    Copyright (C) 1994,95,2002 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or

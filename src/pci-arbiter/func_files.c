@@ -30,6 +30,8 @@
 
 #include <pciaccess.h>
 
+#include "device_map.h"
+
 /* Read or write a block of data from/to the configuration space */
 static error_t
 config_block_op (struct pci_device *dev, off_t offset, size_t * len,
@@ -102,28 +104,28 @@ io_config_file (struct pci_device * dev, off_t offset, size_t * len,
 
 /* Read the mapped ROM */
 error_t
-read_rom_file (struct pci_device * dev, off_t offset, size_t * len,
+read_rom_file (struct pcifs_dirent * e, off_t offset, size_t * len,
 	       void *data)
 {
-  void *fullrom;
+  error_t err;
 
   /* This should never happen */
-  assert_backtrace (dev != 0);
+  assert_backtrace (e->device != 0);
 
   /* Don't exceed the ROM size */
-  if (offset > dev->rom_size)
+  if (offset > e->device->rom_size)
     return EINVAL;
-  if ((offset + *len) > dev->rom_size)
-    *len = dev->rom_size - offset;
+  if ((offset + *len) > e->device->rom_size)
+    *len = e->device->rom_size - offset;
 
-  /* Grab the full rom first */
-  fullrom = calloc(1, dev->rom_size);
-  pci_device_read_rom(dev, fullrom);
+  /* Ensure the rom is mapped */
+  err = device_map_rom (e->device, &e->rom_map);
+  if (err)
+    return err;
 
-  /* Return the requested amount */
-  memcpy (data, fullrom + offset, *len);
+  /* Return the requested tange */
+  memcpy (data, e->rom_map + offset, *len);
 
-  free(fullrom);
   return 0;
 }
 
@@ -202,20 +204,14 @@ io_region_file (struct pcifs_dirent * e, off_t offset, size_t * len,
     region_block_ioport_op (region->base_addr, offset, len, data, read);
   else
     {
-      /* First check whether the region is already mapped */
-      if (region->memory == 0)
-	{
-	  /* Not mapped, try to map it now */
-	  err =
-	    pci_device_map_range (e->device, region->base_addr, region->size,
-				  PCI_DEV_MAP_FLAG_WRITABLE, &region->memory);
-	  if (err)
-	    return err;
-	}
+      /* Ensure the region is mapped */
+      err = device_map_region (e->device, region, &e->region_maps[reg_num]);
+      if (err)
+	return err;
       if (read)
-	memcpy (data, region->memory + offset, *len);
+	memcpy (data, e->region_maps[reg_num] + offset, *len);
       else
-	memcpy (region->memory + offset, data, *len);
+	memcpy (e->region_maps[reg_num] + offset, data, *len);
     }
 
   return err;

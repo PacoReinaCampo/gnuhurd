@@ -1,6 +1,6 @@
 /* Sock functions
 
-   Copyright (C) 1995,96,2000,01,02, 2005 Free Software Foundation, Inc.
+   Copyright (C) 1995,96,2000,01,02, 2005, 2025 Free Software Foundation, Inc.
    Written by Miles Bader <miles@gnu.org>
 
    This program is free software; you can redistribute it and/or
@@ -18,6 +18,7 @@
    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA. */
 
 #include <string.h>		/* For memset() */
+#include <unistd.h>
 
 #include <pthread.h>
 
@@ -123,6 +124,8 @@ sock_create (struct pipe_class *pipe_class, mode_t mode, struct sock **sock)
   new->connect_queue = NULL;
   new->pipe_class = pipe_class;
   new->addr = NULL;
+  new->uid = getuid ();
+  new->gid = getgid ();
   memset (&new->change_time, 0, sizeof (new->change_time));
   pthread_mutex_init (&new->lock, NULL);
 
@@ -164,8 +167,11 @@ sock_clone (struct sock *template, struct sock **sock)
   if (err)
     return err;
 
-  /* Copy some properties from TEMPLATE.  */
-  (*sock)->flags = template->flags & ~PFLOCAL_SOCK_CONNECTED;
+  /* Copy some properties from TEMPLATE.  Clear O_NONBLOCK because the socket
+     returned by 'accept' must not inherit O_NONBLOCK from the parent
+     socket.  */
+  (*sock)->flags =
+    template->flags & ~(PFLOCAL_SOCK_CONNECTED | PFLOCAL_SOCK_NONBLOCK);
 
   return 0;
 }
@@ -353,7 +359,11 @@ addr_get_sock (struct addr *addr, struct sock **sock)
   pthread_mutex_lock (&addr->lock);
   *sock = addr->sock;
   if (*sock)
-    (*sock)->refs++;
+    {
+      pthread_mutex_lock (&(*sock)->lock);
+      (*sock)->refs++;
+      pthread_mutex_unlock (&(*sock)->lock);
+    }
   pthread_mutex_unlock (&addr->lock);
   return *sock ? 0 : EADDRNOTAVAIL;
 }
@@ -387,7 +397,6 @@ sock_connect (struct sock *sock1, struct sock *sock2)
   /* In the case of a connectionless protocol, an already-connected socket may
      be reconnected, so save the old destination for later disposal.  */
   struct pipe *old_sock1_write_pipe = NULL;
-  struct addr *old_sock1_write_addr = NULL;
 
   void connect (struct sock *wr, struct sock *rd)
     {
@@ -419,7 +428,6 @@ sock_connect (struct sock *sock1, struct sock *sock2)
   else
     {
       old_sock1_write_pipe = sock1->write_pipe;
-      old_sock1_write_addr = sock1->write_addr;
 
       /* Always make the forward connection.  */
       connect (sock1, sock2);
@@ -442,10 +450,7 @@ sock_connect (struct sock *sock1, struct sock *sock2)
   pthread_mutex_unlock (&socket_pair_lock);
 
   if (old_sock1_write_pipe)
-    {
-      pipe_remove_writer (old_sock1_write_pipe);
-      ports_port_deref (old_sock1_write_addr);
-    }
+    pipe_remove_writer (old_sock1_write_pipe);
 
   return err;
 }
@@ -493,7 +498,7 @@ sock_shutdown (struct sock *sock, unsigned flags)
 /* ---------------------------------------------------------------- */
 
 error_t
-sock_global_init ()
+sock_global_init (void)
 {
   sock_port_bucket = ports_create_bucket ();
   sock_user_port_class = ports_create_class (sock_user_clean, NULL);
@@ -503,7 +508,7 @@ sock_global_init ()
 
 /* Try to shutdown any active sockets, returning EBUSY if we can't.  */
 error_t
-sock_global_shutdown ()
+sock_global_shutdown (void)
 {
   int num_ports = ports_count_bucket (sock_port_bucket);
   ports_enable_bucket (sock_port_bucket);

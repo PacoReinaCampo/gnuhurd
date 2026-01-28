@@ -30,19 +30,20 @@ checkpath(struct node *source,
 	  struct protid *cred)
 {
   error_t err;
-  struct node *np;
+  struct node *np, *newnp;
 
-  for (np = target, err = 0;
+  for (newnp = target, err = 0;
        /* nothing */;
        /* This special lookup does a diskfs_nput on its first argument
 	  when it succeeds. */
-       err = diskfs_lookup (np, "..", LOOKUP | SPEC_DOTDOT, &np, 0, cred))
+       err = diskfs_lookup (np, "..", LOOKUP | SPEC_DOTDOT, &newnp, 0, cred))
     {
       if (err)
 	{
 	  diskfs_nput (np);
 	  return err;
 	}
+      np = newnp;
 
       if (np == source)
 	{

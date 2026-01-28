@@ -272,7 +272,7 @@ struct sock *udp_v4_lookup_longway(u32 saddr, u16 sport, u32 daddr, u16 dport, i
 	return result;
 }
 
-__inline__ struct sock *udp_v4_lookup(u32 saddr, u16 sport, u32 daddr, u16 dport, int dif)
+struct sock *udp_v4_lookup(u32 saddr, u16 sport, u32 daddr, u16 dport, int dif)
 {
 	struct sock *sk;
 

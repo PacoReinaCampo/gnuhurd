@@ -28,7 +28,7 @@
 #include <device/device.h>
 
 static mach_port_t
-get_console ()
+get_console (void)
 {
   mach_port_t device_master, console;
   error_t err = get_privileged_ports (0, &device_master);
@@ -37,6 +37,7 @@ get_console ()
     return MACH_PORT_NULL;
 
   err = device_open (device_master, D_WRITE | D_READ, "console", &console);
+  mach_port_deallocate (mach_task_self (), device_master);
   if (err)
     return MACH_PORT_NULL;
 
@@ -59,6 +60,7 @@ main (int argc, char **argv)
   stderr = mach_open_devstream (consdev, "w");
   if (!stderr)
     _exit (127);
+  setlinebuf (stderr);
 
   if (argc < 2)
     error (1, 0, "Usage: %s PROGRAM [ARG...]", program_invocation_short_name);

@@ -69,11 +69,10 @@ void
 fat_read_sblock (void)
 {
   error_t err;
-  size_t read;
+  size_t read = sizeof(struct boot_sector);
 
-  sblock = malloc (sizeof (struct boot_sector));
-  err = store_read (store, 0, sizeof (struct boot_sector),
-		    (void **) &sblock, &read);
+  sblock = malloc (read);
+  err = store_read (store, 0, read, (void **) &sblock, &read);
   if (err)
     error (1, err, "Could not read superblock");
 
@@ -607,8 +606,8 @@ fat_get_freespace (void)
 	  if (next_cluster == FAT_FREE_CLUSTER)
 	    free_clusters++;
 	}
+      diskfs_end_catch_exception ();
     }
-  diskfs_end_catch_exception ();
 
   return free_clusters;
 }

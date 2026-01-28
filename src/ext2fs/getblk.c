@@ -98,6 +98,11 @@ ext2_alloc_block (struct node *node, block_t goal, int zero)
 	 &diskfs_node_disknode (node)->info.i_prealloc_count,
 	 &diskfs_node_disknode (node)->info.i_prealloc_block);
     }
+
+  /* Trap trying to allocate superblock, block group descriptor table, or beyond the end */
+  assert_backtrace (result == 0 ||
+		    (result >= group_desc_block_end
+		     && result < store->size >> log2_block_size));
 #else
   result = ext2_new_block (goal, 0, 0);
 #endif
@@ -126,7 +131,12 @@ inode_getblk (struct node *node, int nr, int create, int zero,
 
   *result = diskfs_node_disknode (node)->info.i_data[nr];
   if (*result)
-    return 0;
+    {
+      /* Trap trying to access superblock, block group descriptor table, or beyond the end */
+      assert_backtrace (*result >= group_desc_block_end
+		     && *result < store->size >> log2_block_size);
+      return 0;
+    }
 
   if (!create)
     return EINVAL;
@@ -152,7 +162,7 @@ inode_getblk (struct node *node, int nr, int create, int zero,
 	goal =
 	  (diskfs_node_disknode (node)->info.i_block_group
            * EXT2_BLOCKS_PER_GROUP (sblock))
-	  + sblock->s_first_data_block;
+	  + le32toh (sblock->s_first_data_block);
     }
 
   *result = ext2_alloc_block (node, goal, zero);

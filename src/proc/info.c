@@ -1,5 +1,6 @@
 /* Process information queries
-   Copyright (C) 1992,93,94,95,96,99,2000,01,02 Free Software Foundation, Inc.
+   Copyright (C) 1992,93,94,95,96,99,2000,01,02,21
+   Free Software Foundation, Inc.
 
    This file is part of the GNU Hurd.
 
@@ -34,17 +35,38 @@
 #include "proc.h"
 #include "process_S.h"
 
-
-/* Returns true if PROC1 has `owner' privileges over PROC2 (and can thus get
-   its task port &c).  If PROC2 has an owner, then PROC1 must have that uid;
-   otherwise, both must be in the same login collection.  */
+/* Returns true if PROC1 has `owner' privileges over PROC2 (and can thus get its
+   task port &c).  In the usual case, this checks that PROC1 already has all
+   UID's that PROC2 has, meaning PROC1 would not gain access to any new UID's
+   this way.  The reason the check is performed using PROC1's both effective and
+   available UID's and not just its effective UID's is that POSIX requires
+   kill(2) to work when "the real or effective user ID of the sending process
+   shall match the real or saved set-user-ID of the receiving process".  */
 int
 check_owner (struct proc *proc1, struct proc *proc2)
 {
-  return
-    proc2->p_noowner
-      ? check_uid (proc1, 0) || proc1->p_login == proc2->p_login
-      : check_uid (proc1, proc2->p_owner);
+  /* Anyone can access themselves.  */
+  if (proc1 == proc2)
+    return 1;
+
+  /* If PROC1 is unowned, it cannot access anyone else.  */
+  if (!proc1->p_id || !proc1->p_id->i_nuids)
+    return 0;
+
+  /* Root can always access anyone.  */
+  if (check_uid (proc1, 0))
+    return 1;
+
+  /* Nobody (except root) can access an unowned process.  */
+  if (!proc2->p_id || !proc2->p_id->i_nuids)
+    return 0;
+
+  /* Verify that PROC1 has all UIDs that PROC2 has.  */
+  for (size_t i = 0; i < proc2->p_id->i_nuids; i++)
+    if (!check_uid (proc1, proc2->p_id->i_uids[i]))
+      return 0;
+
+  return 1;
 }
 
 
@@ -213,7 +235,7 @@ get_string (task_t t,
 
   vm_address_t readaddr;
   vm_address_t data;
-  size_t readlen;
+  mach_msg_type_number_t readlen;
   error_t err;
   char *c;
 
@@ -252,7 +274,7 @@ get_string (task_t t,
 static error_t
 get_vector (task_t task,
 	    vm_address_t addr,
-	    int **vec)
+	    vm_address_t **vec)
 {
   vm_address_t readaddr;
   vm_size_t readsize;
@@ -307,10 +329,10 @@ static error_t
 get_string_array (task_t t,
 		  vm_address_t loc,
 		  vm_address_t *buf,
-		  size_t *buflen)
+		  mach_msg_type_number_t *buflen)
 {
   char *bp;
-  int *vector, *vp;
+  vm_address_t *vector, *vp;
   error_t err;
   vm_address_t origbuf = *buf;
 
@@ -378,9 +400,9 @@ get_string_array (task_t t,
 /* Implement proc_getprocargs as described in <hurd/process.defs>. */
 kern_return_t
 S_proc_getprocargs (struct proc *callerp,
-		  pid_t pid,
-		  data_t *buf,
-		  size_t *buflen)
+		    pid_t pid,
+		    data_t *buf,
+		    mach_msg_type_number_t *buflen)
 {
   struct proc *p = pid_find (pid);
 
@@ -416,9 +438,9 @@ S_proc_getprocargs (struct proc *callerp,
 /* Implement proc_getprocenv as described in <hurd/process.defs>. */
 kern_return_t
 S_proc_getprocenv (struct proc *callerp,
-		 pid_t pid,
-		 data_t *buf,
-		 size_t *buflen)
+		   pid_t pid,
+		   data_t *buf,
+		   mach_msg_type_number_t *buflen)
 {
   struct proc *p = pid_find (pid);
 
@@ -461,12 +483,12 @@ S_proc_getprocinfo (struct proc *callerp,
 		    pid_t pid,
 		    int *flags,
 		    int **piarray,
-		    size_t *piarraylen,
+		    mach_msg_type_number_t *piarraylen,
 		    data_t *waits, mach_msg_type_number_t *waits_len)
 {
   struct proc *p = pid_find (pid);
   struct procinfo *pi;
-  size_t nthreads;
+  mach_msg_type_number_t nthreads;
   thread_t *thds;
   error_t err = 0;
   size_t structsize;
@@ -474,10 +496,11 @@ S_proc_getprocinfo (struct proc *callerp,
   int pi_alloced = 0, waits_alloced = 0;
   /* The amount of WAITS we've filled in so far.  */
   mach_msg_type_number_t waits_used = 0;
-  size_t tkcount, thcount;
+  mach_msg_type_number_t tkcount, thcount;
   struct proc *tp;
   task_t task;			/* P's task port.  */
   mach_port_t msgport;		/* P's msgport, or MACH_PORT_NULL if none.  */
+  int owned;
 
   /* No need to check CALLERP here; we don't use it. */
 
@@ -602,6 +625,8 @@ S_proc_getprocinfo (struct proc *callerp,
   *piarraylen = structsize / sizeof (int);
   pi = (struct procinfo *) *piarray;
 
+  owned = p->p_id && p->p_id->i_nuids;
+
   pi->state =
     ((p->p_stopped ? PI_STOPPED : 0)
      | (p->p_exec ? PI_EXECED : 0)
@@ -609,12 +634,12 @@ S_proc_getprocinfo (struct proc *callerp,
      | (!p->p_pgrp->pg_orphcnt ? PI_ORPHAN : 0)
      | (p->p_msgport == MACH_PORT_NULL ? PI_NOMSG : 0)
      | (p->p_pgrp->pg_session->s_sid == p->p_pid ? PI_SESSLD : 0)
-     | (p->p_noowner ? PI_NOTOWNED : 0)
+     | (owned ? 0 : PI_NOTOWNED)
      | (!p->p_parentset ? PI_NOPARENT : 0)
      | (p->p_traced ? PI_TRACED : 0)
      | (p->p_msgportwait ? PI_GETMSG : 0)
      | (p->p_loginleader ? PI_LOGINLD : 0));
-  pi->owner = p->p_owner;
+  pi->owner = owned ? p->p_id->i_uids[0] : 0;
   pi->ppid = p->p_parent->p_pid;
   pi->pgrp = p->p_pgrp->pg_pgid;
   pi->session = p->p_pgrp->pg_session->s_sid;
@@ -859,7 +884,7 @@ kern_return_t
 S_proc_getloginpids (struct proc *callerp,
 		     pid_t id,
 		     pid_t **pids,
-		     size_t *npids)
+		     mach_msg_type_number_t *npids)
 {
   error_t err = 0;
   struct proc *l = pid_find (id);
@@ -916,6 +941,8 @@ S_proc_getloginpids (struct proc *callerp,
 	    if (new - parray > parraysize)
 	      {
 		struct proc **newparray;
+		ptrdiff_t tail_offset = tail - parray;
+		ptrdiff_t new_offset = new - parray;
 		newparray = realloc (parray, ((parraysize *= 2)
 					      * sizeof (struct proc *)));
 		if (! newparray)
@@ -924,8 +951,8 @@ S_proc_getloginpids (struct proc *callerp,
 		    return ENOMEM;
 		  }
 
-		tail = newparray + (tail - parray);
-		new = newparray + (new - parray);
+		tail = newparray + tail_offset;
+		new = newparray + new_offset;
 		parray = newparray;
 	      }
 	    *new++ = p;
@@ -954,7 +981,7 @@ S_proc_getloginpids (struct proc *callerp,
 /* Implement proc_setlogin as described in <hurd/process.defs>. */
 kern_return_t
 S_proc_setlogin (struct proc *p,
-	         char *login)
+	         const_string_t login)
 {
   struct login *l;
 
@@ -979,7 +1006,7 @@ S_proc_setlogin (struct proc *p,
 /* Implement proc_getlogin as described in <hurd/process.defs>. */
 kern_return_t
 S_proc_getlogin (struct proc *p,
-	         char *login)
+	         string_t login)
 {
   if (!p)
     return EOPNOTSUPP;
@@ -1030,7 +1057,7 @@ S_proc_getnports (struct proc *callerp,
 /* Implement proc_set_path as described in <hurd/process.defs>. */
 kern_return_t
 S_proc_set_exe (struct proc *p,
-	        char *path)
+	        const_string_t path)
 {
   char *copy;
 
@@ -1050,7 +1077,7 @@ S_proc_set_exe (struct proc *p,
 kern_return_t
 S_proc_get_exe (struct proc *callerp,
 		pid_t pid,
-		char *path)
+		string_t path)
 {
   struct proc *p = pid_find (pid);
 
@@ -1066,3 +1093,11 @@ S_proc_get_exe (struct proc *callerp,
   return 0;
 }
 
+kern_return_t
+S_proc_getchildren_rusage (struct proc *p, struct rusage *ru)
+{
+  if (!p)
+    return EOPNOTSUPP;
+  *ru = p->p_child_rusage;
+  return 0;
+}

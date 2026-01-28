@@ -106,8 +106,10 @@ thread_state (thread_basic_info_t bi)
 static error_t
 fetch_procinfo (process_t server, pid_t pid,
 		ps_flags_t need, ps_flags_t *have,
-		struct procinfo **pi, size_t *pi_size,
-		char **waits, size_t *waits_len)
+		struct procinfo **pi,
+		mach_msg_type_number_t *pi_size,
+		char **waits,
+		mach_msg_type_number_t *waits_len)
 {
   static const struct { ps_flags_t ps_flag; int pi_flags; } map[] =
   {
@@ -166,9 +168,9 @@ merge_procinfo (struct proc_stat *ps, ps_flags_t need, ps_flags_t have)
 {
   error_t err;
   struct procinfo *new_pi, old_pi_hdr;
-  size_t new_pi_size;
+  mach_msg_type_number_t new_pi_size;
   char *new_waits = 0;
-  size_t new_waits_len = 0;
+  mach_msg_type_number_t new_waits_len = 0;
   /* We always re-fetch any thread-specific info, as the set of threads could
      have changed since the last time we did this, and we can't tell.  */
   ps_flags_t really_need = need | (have & PSTAT_PROCINFO_REFETCH);
@@ -758,7 +760,7 @@ proc_stat_set_flags (struct proc_stat *ps, ps_flags_t flags)
 
   /* Turn off use of the msg port if we decide somewhere along the way that
      it's hosed.  */
-  void suppress_msgport ()
+  void suppress_msgport (void)
     {
       /* Turn off those things that were only good given the msg port.  */
       need &= ~(flags & ~no_msgport_flags);
@@ -919,16 +921,17 @@ proc_stat_set_flags (struct proc_stat *ps, ps_flags_t flags)
   /* The process's exec arguments */
   if (NEED (PSTAT_ARGS, PSTAT_PID))
     {
-      char *buf = malloc (100);
-      ps->args_len = 100;
+      mach_msg_type_number_t args_len = 100;
+      char *buf = malloc (args_len);
       ps->args = buf;
       if (ps->args)
 	{
-	  if (proc_getprocargs (server, ps->pid, &ps->args, &ps->args_len))
+	  if (proc_getprocargs (server, ps->pid, &ps->args, &args_len))
 	    free (buf);
 	  else
 	    {
 	      have |= PSTAT_ARGS;
+	      ps->args_len = (size_t) args_len;
 	      ps->args_vm_alloced = (ps->args != buf);
 	      if (ps->args_vm_alloced)
 		free (buf);
@@ -939,16 +942,17 @@ proc_stat_set_flags (struct proc_stat *ps, ps_flags_t flags)
   /* The process's exec environment */
   if (NEED (PSTAT_ENV, PSTAT_PID))
     {
-      char *buf = malloc (100);
-      ps->env_len = 100;
+      mach_msg_type_number_t env_len = 100;
+      char *buf = malloc (env_len);
       ps->env = buf;
       if (ps->env)
 	{
-	  if (proc_getprocenv (server, ps->pid, &ps->env, &ps->env_len))
+	  if (proc_getprocenv (server, ps->pid, &ps->env, &env_len))
 	    free (buf);
 	  else
 	    {
 	      have |= PSTAT_ENV;
+	      ps->env_len = (size_t) env_len;
 	      ps->env_vm_alloced = (ps->env != buf);
 	      if (ps->env_vm_alloced)
 		free (buf);
@@ -1057,8 +1061,7 @@ proc_stat_set_flags (struct proc_stat *ps, ps_flags_t flags)
 /* ---------------------------------------------------------------- */
 /* Discard PS and any resources it holds.  */
 void
-_proc_stat_free (ps)
-     struct proc_stat *ps;
+_proc_stat_free (struct proc_stat *ps)
 {
   if (ps->context->user_hooks && ps->context->user_hooks->cleanup)
     /* Free any user state.  */
@@ -1097,6 +1100,7 @@ _proc_stat_free (ps)
 	    0, &ps->task_events_info_buf, char);
   MFREEMEM (PSTAT_THREAD_WAITS, thread_waits, ps->thread_waits_len,
 	    ps->thread_waits_vm_alloced, 0, char);
+  MFREEMEM (PSTAT_EXE, exe, sizeof(string_t), ps->exe_vm_alloced, 0, char);
 
   FREE (ps);
 }

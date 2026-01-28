@@ -777,13 +777,23 @@ If neither @option{--interleave} or @option{--layer} is specified, multiple
 
 @node Shutdown
 @section Shutdown
-@scindex halt
+@scindex halt, poweroff, shutdown
 @scindex reboot
 
 You can shut down your GNU/Hurd machine by typing
 
+@example
 $ @kbd{su}
 # @kbd{halt}
+@end example
+
+If the above commands do not work to poweroff the machine, then you
+should instead use the hurd specific commands @kbd{halt-hurd},
+@kbd{poweroff-hurd}, or @kbd{reboot-hurd}, which do not actually shut
+down daemons, but properly sync data to the disk.  After the data is
+synced to the disk, you can safely hard shut off the machine (usually
+via holding the power off button).  To deal with filesystem
+corruption, see @ref{Repairing Filesystems}.
 
 @node Foundations
 @chapter Foundations
@@ -823,14 +833,14 @@ the rest of the Hurd relies upon them quite heavily.
 
 @node Threads Library
 @section Threads Library
-@scindex libthreads
-@scindex cthreads.h
+@scindex libpthread
+@scindex pthread.h
 
 All Hurd servers and libraries are aggressively multithreaded in order
 to take full advantage of any multiprocessing capabilities provided by
 the microkernel and the underlying hardware.  The Hurd threads library,
-@code{libthreads}, contains the default Hurd thread implementation, which
-is declared in @code{<cthreads.h>}.
+@code{libpthread}, contains the default Hurd thread implementation, which
+is declared in @code{<pthread.h>}.
 
 The Hurd uses POSIX pthreads, which are documented in a lot of places.
 @c Thomas, 26-03-1998
@@ -1306,7 +1316,7 @@ The @code{<hurd/iohelp.h>} file declares several functions which are
 useful for low-level I/O implementations.  Most Hurd servers do not call
 these functions directly, but they are used by several of the Hurd
 filesystem and networking helper libraries.  @code{libiohelp} requires
-@code{libthreads}.
+@code{libpthread}.
 
 @menu
 * I/O Users::                   User authentication management.
@@ -1536,9 +1546,17 @@ only permissible error returns are @code{EIO}, @code{EDQUOT}, and
 
 @deftypefun error_t pager_write_page (@w{struct user_pager_info *@var{pager}}, @w{vm_offset_t @var{page}}, @w{vm_address_t @var{buf}})
 For pager @var{pager}, synchronously write one page from @var{buf} to
-offset @var{page}.  In addition, @code{vm_deallocate} (or equivalent)
-@var{buf}.  The only permissible error returns are @code{EIO},
-@code{EDQUOT}, and @code{ENOSPC}.
+offset @var{page}.  Do not deallocate @var{buf}, and do not keep any
+references to @var{buf}.  The only permissible error returns are
+@code{EIO}, @code{EDQUOT}, and @code{ENOSPC}.
+@end deftypefun
+
+@deftypefun error_t pager_write_pages (@w{struct user_pager_info *@var{pager}}, @w{vm_offset_t @var{offset}}, @w{vm_address_t @var{data}}, @w{vm_size_t @var{length}}, @w{vm_size_t *@var{written}})
+The user may define this function.  For pager @var{pager}, synchronously write
+potentially multiple pages from @var{data} to offset @var{offset}.  Do not
+deallocate @var{data}, and do not keep any references to @var{data}.  The only
+permissible error returns are @code{EIO}, @code{EDQUOT}, @code{EOPNOTSUPP}, and
+@code{ENOSPC}.
 @end deftypefun
 
 @deftypefun error_t pager_unlock_page (@w{struct user_pager_info *@var{pager}}, @w{vm_offset_t @var{address}})
@@ -1933,8 +1951,8 @@ Network filesystems, such as @code{nfs} and @code{ftpfs}
 (@pxref{Distributed Filesystems}).
 
 @item
-Single files with dynamic content, such as FIXME: we need a good
-example.
+Single files with dynamic content, such as the @code{random}
+translator.
 
 @item
 @c FIXME: reword
@@ -2100,6 +2118,15 @@ Only display files that have translators.
 @node Invoking mount
 @subsection Invoking @code{mount}
 
+One does not mount filesystem partitions on the Hurd.  Instead one
+sets a translator, which translates the device into a filesystem.
+
+# @kbd{settrans /mnt /hurd/ext2fs /dev/hd0s8}
+
+You can still unmount a filesystem partition, via the @kbd{umount}
+command.
+
+# @kbd{umount /dev/hd0s8}
 
 @node Invoking fsysopts
 @subsection Invoking @code{fsysopts}
@@ -2186,7 +2213,7 @@ Redefining this is the normal way to add option parsing to a trivfs
 program.
 @end deftypevar
 
-@deftypefun error_t trivfs_set_options (@w{struct trivfs_control *@var{fsys}}, @w{char *@var{argz}}, @w{size_t @var{argz_len}})
+@deftypefun error_t trivfs_set_options (@w{struct trivfs_control *@var{fsys}}, @w{const char *@var{argz}}, @w{size_t @var{argz_len}})
 Set runtime options for @var{fsys} to @var{argz} and @var{argz_len}.
 The default definition for this routine simply uses
 @var{trivfs_runtime_argp} (supplying @var{fsys} as the argp input
@@ -2297,7 +2324,8 @@ These variables are returned in the @var{st_fstype} and @var{st_fsid}
 fields of @code{struct stat}.  @var{trivfs_fstype} should be chosen
 from the @code{FSTYPE_*} constants found in
 @code{<hurd/hurd_types.h>}.  If @code{trivfs_fsid} is zero, trivfs
-will use the pid of the translator instead.
+will use the pid of the translator instead.  Most trivial translators
+will want to use @code{FSTYPE_MISC}.
 @end deftypevar
 
 @deftypevar {extern int} trivfs_allow_open
@@ -2356,7 +2384,7 @@ If these variables is non-zero, they will be called every time a protid or
 peropen structure is about to be destroyed.
 @end deftypefn
 
-@deftypefn {Variable} error_t (*trivfs_getroot_hook) (@w{struct trivfs_control *@var{cntl}}, @w{mach_port_t @var{reply_port}}, @w{mach_msg_type_name_t @var{reply_port_type}}, @w{mach_port_t @var{dotdot}}, @w{uid_t *@var{uids}}, @w{u_int @var{nuids}}, @w{uid_t *@var{gids}}, @w{u_int @var{ngids}}, @w{int @var{flags}}, @w{retry_type *@var{do_retry}}, @w{char *@var{retry_name}}, @w{mach_port_t *@var{node}}, @w{mach_msg_type_name_t *@var{node_type}})
+@deftypefn {Variable} error_t (*trivfs_getroot_hook) (@w{struct trivfs_control *@var{cntl}}, @w{mach_port_t @var{reply_port}}, @w{mach_msg_type_name_t @var{reply_port_type}}, @w{mach_port_t @var{dotdot}}, @w{const uid_t *@var{uids}}, @w{unsigned @var{nuids}}, @w{const uid_t *@var{gids}}, @w{unsigned @var{ngids}}, @w{int @var{flags}}, @w{retry_type *@var{do_retry}}, @w{char *@var{retry_name}}, @w{mach_port_t *@var{node}}, @w{mach_msg_type_name_t *@var{node_type}})
 If this variable is set, it will be called by @code{trivfs_S_fsys_getroot}
 before any other processing takes place.  If the return value is
 @code{EAGAIN}, normal trivfs getroot processing continues, otherwise the
@@ -2486,7 +2514,7 @@ Initialize a transbox, which contains state information for active
 translators.
 @end deftypefun
 
-@deftypefn {Typedef} typedef error_t (*fshelp_fetch_root_callback1_t) (@w{void *@var{cookie1}}, @w{void *@var{cookie2}}, @w{uid_t *@var{uid}}, @w{gid_t *@var{gid}}, @w{char **@var{argz}}, @w{size_t *@var{argz_len}})
+@deftypefn {Typedef} typedef error_t (*fshelp_fetch_root_callback1_t) (@w{void *@var{cookie1}}, @w{void *@var{cookie2}}, @w{uid_t *@var{uid}}, @w{gid_t *@var{gid}}, @w{char **@var{argz}}, @w{mach_msg_type_number_t *@var{argz_len}})
 This routine is called by @code{fshelp_fetch_root} to fetch more
 information.  Return the owner and group of the underlying translated
 file in @code{*@var{uid}} and @code{*@var{gid}}; point
@@ -2942,7 +2970,7 @@ with Unix.
 
 This chapter does not discuss @file{/dev/zero} or any of the
 microkernel-based devices, since these are translated by the generalized
-storeio server (FIXME xref).
+storeio server's zero store. @xref{the zero store}.
 
 FIXME: finish
 
@@ -2997,9 +3025,6 @@ If @option{--name} is specified, the client must use the device name in
 
 @option{--master-device} can be useful to open the virtual interface
 created by some other programs, for example by eth-multiplexer.
-
-
-FIXME: a chapter on libtreefs and libdirmgt will probably go here
 
 
 @node Stores
@@ -3344,6 +3369,7 @@ consuming the @var{task} send right.
 @end deftypevar
 
 @subsubsection @code{zero} store
+@anchor{the zero store}
 @cindex @code{zero} store
 
 @deftypevar {extern const struct store_class} store_zero_class
@@ -3620,6 +3646,7 @@ workstations, as well.
 * Repairing Filesystems::       Recovering from minor filesystem crashes.
 * Linux Extended 2 FS::         The popular Linux filesystem format.
 * ISO-9660 CD-ROM FS::          Standard CD-ROM format.
+* FAT FS::                      Basic universal filesystem.
 * Diskfs Library::              Implementing new filesystem servers.
 @end menu
 
@@ -3628,22 +3655,82 @@ workstations, as well.
 @section Repairing Filesystems
 @pindex fsck
 
-FIXME: finish
+Please note that as of 2023, the Hurd still uses the @code{ext2}
+filesystem, which is not a journaling filesystem.  This means that
+filesystem corruption is still possible, normally when the Hurd
+becomes unresponsive, and you are forced to hard shutoff the
+machine. Luckily, the @code{/} filesystem is automatically checked and
+fixed at boot time (though you may have to manually fsck your
+partitions every now and then).  You will know that your filesystem
+partitions need to be repaired if the command @command{fsysopts <mount
+point>} outputs @code{--readonly}.  For example:
 
+@example
+$ fsysopts /home
+  /hurd/ext2fs --readonly --relatime /dev/hd0s6
+@end example
+
+To fix your filesystems, you should take a look at @code{/etc/fstab}
+to find your partitions:
+
+@example
+$ cat /etc/fstab
+@end example
+
+Your partition/s will be something like @code{/dev/sd0sN} (or
+@code{/dev/hd0sN}), where 'N' is a number.  To fix the corrupted
+filesystem, login as the 'root' user, and run the following command
+(replacing N with your number).
+
+@example
+# umount /dev/sd0sN
+# fsck.ext2 /dev/sd0sN
+@end example
+
+If you have many partitions, then you may need to repeat this
+procedure for all partitions.  Then you can reboot.
+
+@example
+# reboot
+@end example
+
+If the @command{reboot} command fails, which happens occassionally,
+then use the hurd specific command @command{halt-hurd}.
 
 @node Linux Extended 2 FS
 @section Linux Extended 2 FS
 @pindex ext2fs
 
-FIXME: finish
+The ext2 filesystem is not the most advanced, robust, or modern
+filesystem, but it is the current recommended filesystem.  A good
+@code{ext2} filesystem design document is available
+@url{https://e2fsprogs.sourceforge.net/ext2intro.html, on the web}.
 
+The Hurd's ext2fs supports partition sizes (using SATA drives)
+of up to 2 TiB.  Please note that IDE disk drivers only support
+128GiB partition sizes.
+
+Most likely you will have to deal with occasional filesystem
+corruption.  Please read the section on @ref{Repairing Filesystems} to
+learn how to fix this.
 
 @node ISO-9660 CD-ROM FS
 @section ISO-9660 CD-ROM FS
 @pindex iso9660fs
 
-FIXME: finish
+ISO 9660 is an internationally standarized filesystem designed for
+DVDs or CDs.  You probably used an "iso installation image" to install
+the Hurd.  When you install the Hurd, you are most likely using the
+iso9660fs translator.
 
+@node FAT FS
+@section FAT FS
+@pindex fatfs vfat
+
+FAT FS is a simplistic filesystem that is easily portable to many
+operating systems.  It is a good filesystem to have on a usb stick,
+because you can share data between operating systems, since most
+operating systems have a FAT FS driver.
 
 @node Diskfs Library
 @section Diskfs Library
@@ -3984,7 +4071,7 @@ If @code{@var{np}->dn_set_ctime} is set, then modify
 operations for @code{st_atim} and @code{st_mtim} as well.
 @end deftypefun
 
-@deftypefun {struct node *} diskfs_check_lookup_cache (@w{struct node *@var{dir}}, @w{char *@var{name}})
+@deftypefun {struct node *} diskfs_check_lookup_cache (@w{struct node *@var{dir}}, @w{const char *@var{name}})
 Scan the cache looking for @var{name} inside @var{dir}.  If we don't
 know any entries at all, then return zero.  If the entry is confirmed to
 not exist, then return -1.  Otherwise, return @var{np} for the entry,
@@ -3995,7 +4082,7 @@ with a newly-allocated reference.
 Return the node corresponding to @var{cache_id} in @code{*@var{npp}}.
 @end deftypefun
 
-@deftypefun void diskfs_enter_lookup_cache (@w{struct node *@var{dir}}, @w{struct node *@var{np}}, @w{char *@var{name}})
+@deftypefun void diskfs_enter_lookup_cache (@w{struct node *@var{dir}}, @w{struct node *@var{np}}, @w{const char *@var{name}})
 Node @var{np} has just been found in @var{dir} with @var{name}.  If
 @var{np} is null, that means that this name has been confirmed as absent
 in the directory.
@@ -4066,8 +4153,8 @@ Set @code{*@var{statfsbuf}} with appropriate values to reflect the
 current state of the filesystem.
 @end deftypefun
 
-@deftypefun error_t diskfs_lookup (@w{struct node *@var{dp}}, @w{const char *@var{name}}, @w{enum lookup_type @var{type}}, @w{struct node **@var{np}}, @w{struct dirstat *@var{ds}}, @w{struct protid *@var{cred}})
-@deftypefunx error_t diskfs_lookup_hard (@w{struct node *@var{dp}}, @w{const char *@var{name}}, @w{enum lookup_type @var{type}}, @w{struct node **@var{np}}, @w{struct dirstat *@var{ds}}, @w{struct protid *@var{cred}})
+@deftypefun error_t diskfs_lookup (@w{struct node *@var{dp}}, @w{char *@var{name}}, @w{enum lookup_type @var{type}}, @w{struct node **@var{np}}, @w{struct dirstat *@var{ds}}, @w{struct protid *@var{cred}})
+@deftypefunx error_t diskfs_lookup_hard (@w{struct node *@var{dp}}, @w{char *@var{name}}, @w{enum lookup_type @var{type}}, @w{struct node **@var{np}}, @w{struct dirstat *@var{ds}}, @w{struct protid *@var{cred}})
 You should not define @code{diskfs_lookup}, because it is simply a
 wrapper for @code{diskfs_lookup_hard}, and is already defined in
 @code{libdiskfs}.
@@ -4204,7 +4291,7 @@ continuously since the call to @code{diskfs_lookup}.
 Initialize @var{ds} such that @code{diskfs_drop_dirstat} will ignore it.
 @end deftypefun
 
-@deftypefun error_t diskfs_get_directs (@w{struct node *@var{dp}}, @w{int @var{entry}}, @w{int @var{n}}, @w{char **@var{data}}, @w{u_int *@var{datacnt}}, @w{vm_size_t @var{bufsiz}}, @w{int *@var{amt}})
+@deftypefun error_t diskfs_get_directs (@w{struct node *@var{dp}}, @w{int @var{entry}}, @w{int @var{n}}, @w{char **@var{data}}, @w{mach_msg_type_number_t *@var{datacnt}}, @w{vm_size_t @var{bufsiz}}, @w{int *@var{amt}})
 Return @var{n} directory entries starting at @var{entry} from locked
 directory node @var{dp}.  Fill @code{*@var{data}} with the entries;
 which currently points to @code{*@var{datacnt}} bytes.  If it isn't big
@@ -4225,13 +4312,13 @@ the call@dots{} if this user cannot search the directory, then this
 routine should fail.
 @end deftypefun
 
-@deftypefun error_t diskfs_get_translator (@w{struct node *@var{np}}, @w{char **@var{namep}}, @w{u_int *@var{namelen}})
+@deftypefun error_t diskfs_get_translator (@w{struct node *@var{np}}, @w{char **@var{namep}}, @w{mach_msg_type_number_t *@var{namelen}})
 For locked node @var{np} (for which @code{diskfs_node_translated} is
 true) look up the name of its translator.  Store the name into newly
 malloced storage and set @code{*@var{namelen}} to the total length.
 @end deftypefun
 
-@deftypefun error_t diskfs_set_translator (@w{struct node *@var{np}}, @w{char *@var{name}}, @w{u_int @var{namelen}}, @w{struct protid *@var{cred}})
+@deftypefun error_t diskfs_set_translator (@w{struct node *@var{np}}, @w{char *@var{name}}, @w{mach_msg_type_number_t @var{namelen}}, @w{struct protid *@var{cred}})
 For locked node @var{np}, set the name of the translating program to be
 @var{name}, which is @var{namelen} bytes long.  @var{cred} identifies
 the user responsible for the call.

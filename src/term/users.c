@@ -86,7 +86,7 @@ struct protid_hook
 };
 
 void
-init_users ()
+init_users (void)
 {
   error_t err;
 
@@ -358,7 +358,7 @@ S_term_getctty (struct trivfs_protid *cred,
 
   if (!cred
       || cred->pi.bucket != term_bucket
-      || cred->pi.class != tty_class)
+      || (cred->pi.class != tty_class && cred->pi.class != pty_class))
     return EOPNOTSUPP;
 
   pthread_mutex_lock (&global_lock);
@@ -468,7 +468,7 @@ S_term_open_ctty (struct trivfs_protid *cred,
 
 /* Implement chown locally; don't pass the value down to the
    underlying node.  */
-error_t
+kern_return_t
 trivfs_S_file_chown (struct trivfs_protid *cred,
 		     mach_port_t reply,
 		     mach_msg_type_name_t reply_type,
@@ -514,7 +514,7 @@ out:
 }
 
 /* Implement chmod locally.  */
-error_t
+kern_return_t
 trivfs_S_file_chmod (struct trivfs_protid *cred,
 		     mach_port_t reply,
 		     mach_msg_type_name_t reply_type,
@@ -557,14 +557,14 @@ out:
 
 /* Called for user writes to the terminal as described in
    <hurd/io.defs>.  */
-error_t
+kern_return_t
 trivfs_S_io_write (struct trivfs_protid *cred,
 		   mach_port_t reply,
 		   mach_msg_type_name_t replytype,
-		   data_t data,
-		   size_t datalen,
-		   loff_t offset,
-		   size_t *amt)
+		   const_data_t data,
+		   mach_msg_type_name_t datalen,
+		   off_t offset,
+		   vm_size_t *amt)
 {
   int i;
   int cancel;
@@ -635,14 +635,14 @@ trivfs_S_io_write (struct trivfs_protid *cred,
 }
 
 /* Called for user reads from the terminal.  */
-error_t
+kern_return_t
 trivfs_S_io_read (struct trivfs_protid *cred,
 		  mach_port_t reply,
 		  mach_msg_type_name_t replytype,
 		  data_t *data,
-		  size_t *datalen,
-		  loff_t offset,
-		  size_t amount)
+		  mach_msg_type_name_t *datalen,
+		  off_t offset,
+		  vm_size_t amount)
 {
   int cancel;
   int i, max;
@@ -776,7 +776,7 @@ trivfs_S_io_read (struct trivfs_protid *cred,
   return !*datalen && cancel ? EINTR : 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_pathconf (struct trivfs_protid *cred,
 		      mach_port_t reply,
 		      mach_msg_type_name_t reply_type,
@@ -816,11 +816,11 @@ trivfs_S_io_pathconf (struct trivfs_protid *cred,
 }
 
 
-error_t
+kern_return_t
 trivfs_S_io_readable (struct trivfs_protid *cred,
 		      mach_port_t reply,
 		      mach_msg_type_name_t replytype,
-		      size_t *amt)
+		      vm_size_t *amt)
 {
   if (!cred)
     return EOPNOTSUPP;
@@ -842,7 +842,7 @@ trivfs_S_io_readable (struct trivfs_protid *cred,
   return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_revoke (struct trivfs_protid *cred,
 		    mach_port_t reply,
 		    mach_msg_type_name_t replytype)
@@ -1045,9 +1045,9 @@ S_tioctl_tiocflush (struct trivfs_protid *cred,
 /* TIOCGETA ioctl -- Get termios state */
 kern_return_t
 S_tioctl_tiocgeta (struct trivfs_protid *cred,
-		   tcflag_t *modes,
-		   cc_t *ccs,
-		   speed_t *speeds)
+		   modes_t modes,
+		   ccs_t ccs,
+		   speeds_t speeds)
 {
   if (!cred
       || cred->pi.bucket != term_bucket)
@@ -1075,9 +1075,9 @@ S_tioctl_tiocgeta (struct trivfs_protid *cred,
 /* Common code for the varios TIOCSET* commands. */
 static error_t
 set_state (struct trivfs_protid *cred,
-	   tcflag_t *modes,
-	   cc_t *ccs,
-	   speed_t *speeds,
+	   const modes_t modes,
+	   const ccs_t ccs,
+	   const speeds_t speeds,
 	   int draino,
 	   int flushi)
 {
@@ -1166,9 +1166,9 @@ set_state (struct trivfs_protid *cred,
 /* TIOCSETA -- Set termios state */
 kern_return_t
 S_tioctl_tiocseta (struct trivfs_protid *cred,
-		   tcflag_t *modes,
-		   cc_t *ccs,
-		   speed_t *speeds)
+		   const modes_t modes,
+		   const ccs_t ccs,
+		   const speeds_t speeds)
 {
   return set_state (cred, modes, ccs, speeds, 0, 0);
 }
@@ -1176,9 +1176,9 @@ S_tioctl_tiocseta (struct trivfs_protid *cred,
 /* Drain output, then set term state.  */
 kern_return_t
 S_tioctl_tiocsetaw (struct trivfs_protid *cred,
-		    tcflag_t *modes,
-		    cc_t *ccs,
-		    speed_t *speeds)
+		    const modes_t modes,
+		    const ccs_t ccs,
+		    const speeds_t speeds)
 {
   return set_state (cred, modes, ccs, speeds, 1, 0);
 }
@@ -1186,9 +1186,9 @@ S_tioctl_tiocsetaw (struct trivfs_protid *cred,
 /* Flush input, drain output, then set term state.  */
 kern_return_t
 S_tioctl_tiocsetaf (struct trivfs_protid *cred,
-		    tcflag_t *modes,
-		    cc_t *ccs,
-		    speed_t *speeds)
+		    const modes_t modes,
+		    const ccs_t ccs,
+		    const speeds_t speeds)
 
 {
   return set_state (cred, modes, ccs, speeds, 1, 1);
@@ -1736,7 +1736,7 @@ S_tioctl_tiocsbrk (struct trivfs_protid *cred)
   return err;
 }
 
-error_t
+kern_return_t
 trivfs_S_file_set_size (struct trivfs_protid *cred,
 			mach_port_t reply, mach_msg_type_name_t reply_type,
 			off_t size)
@@ -1755,7 +1755,7 @@ trivfs_S_file_set_size (struct trivfs_protid *cred,
   return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_seek (struct trivfs_protid *cred,
 		  mach_port_t reply, mach_msg_type_name_t reply_type,
 		  off_t off,
@@ -1765,7 +1765,7 @@ trivfs_S_io_seek (struct trivfs_protid *cred,
   return ESPIPE;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_get_openmodes (struct trivfs_protid *cred,
 			   mach_port_t reply,
 			   mach_msg_type_name_t replytype,
@@ -1782,7 +1782,7 @@ trivfs_S_io_get_openmodes (struct trivfs_protid *cred,
 
 #define HONORED_STATE_MODES (O_APPEND|O_ASYNC|O_FSYNC|O_NONBLOCK|O_NOATIME)
 
-error_t
+kern_return_t
 trivfs_S_io_set_all_openmodes (struct trivfs_protid *cred,
 			       mach_port_t reply,
 			       mach_msg_type_name_t replytype,
@@ -1814,7 +1814,7 @@ trivfs_S_io_set_all_openmodes (struct trivfs_protid *cred,
   return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_set_some_openmodes (struct trivfs_protid *cred,
 			     mach_port_t reply,
 			     mach_msg_type_name_t reply_type,
@@ -1838,7 +1838,7 @@ trivfs_S_io_set_some_openmodes (struct trivfs_protid *cred,
   return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_clear_some_openmodes (struct trivfs_protid *cred,
 			       mach_port_t reply,
 			       mach_msg_type_name_t reply_type,
@@ -1856,7 +1856,7 @@ trivfs_S_io_clear_some_openmodes (struct trivfs_protid *cred,
   return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_mod_owner (struct trivfs_protid *cred,
 		    mach_port_t reply,
 		    mach_msg_type_name_t reply_type,
@@ -1872,7 +1872,7 @@ trivfs_S_io_mod_owner (struct trivfs_protid *cred,
   return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_get_owner (struct trivfs_protid *cred,
 		    mach_port_t erply,
 		    mach_msg_type_name_t reply_type,
@@ -1892,7 +1892,7 @@ trivfs_S_io_get_owner (struct trivfs_protid *cred,
   return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_get_icky_async_id (struct trivfs_protid *cred,
 			       mach_port_t reply,
 			       mach_msg_type_name_t reply_type,
@@ -1913,7 +1913,7 @@ trivfs_S_io_get_icky_async_id (struct trivfs_protid *cred,
   return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_async (struct trivfs_protid *cred,
 		   mach_port_t reply, mach_msg_type_name_t reply_type,
 		   mach_port_t notify,
@@ -1987,7 +1987,7 @@ io_select_common (struct trivfs_protid *cred,
     }
 }
 
-error_t
+kern_return_t
 trivfs_S_io_select (struct trivfs_protid *cred,
 		    mach_port_t reply,
 		    mach_msg_type_name_t reply_type,
@@ -1996,7 +1996,7 @@ trivfs_S_io_select (struct trivfs_protid *cred,
   return io_select_common (cred, reply, reply_type, NULL, type);
 }
 
-error_t
+kern_return_t
 trivfs_S_io_select_timeout (struct trivfs_protid *cred,
 			    mach_port_t reply,
 			    mach_msg_type_name_t reply_type,
@@ -2019,13 +2019,13 @@ trivfs_S_io_map  (struct trivfs_protid *cred,
 }
 
 static void
-report_sig_start ()
+report_sig_start (void)
 {
   sigs_in_progress++;
 }
 
 static void
-report_sig_end ()
+report_sig_end (void)
 {
   sigs_in_progress--;
   if ((sigs_in_progress == 0) && input_sig_wakeup)
@@ -2099,7 +2099,7 @@ send_signal (int signo)
 }
 
 void
-report_carrier_off ()
+report_carrier_off (void)
 {
   clear_queue (inputq);
   (*bottom->notice_input_flushed) ();
@@ -2110,7 +2110,7 @@ report_carrier_off ()
 }
 
 void
-report_carrier_on ()
+report_carrier_on (void)
 {
   termflags &= ~NO_CARRIER;
   pthread_cond_broadcast (&carrier_alert);
@@ -2125,7 +2125,7 @@ report_carrier_error (error_t err)
 
 kern_return_t
 S_term_get_nodename (struct trivfs_protid *cred,
-		     char *name)
+		     string_t name)
 {
   if (!cred
       || cred->pi.bucket != term_bucket
@@ -2144,7 +2144,7 @@ S_term_get_nodename (struct trivfs_protid *cred,
 
 kern_return_t
 S_term_set_nodename (struct trivfs_protid *cred,
-		     char *name)
+		     const_string_t name)
 {
   error_t err = 0;
   if (!cred
@@ -2172,7 +2172,7 @@ S_term_set_filenode (struct trivfs_protid *cred,
 
 kern_return_t
 S_term_get_peername (struct trivfs_protid *cred,
-		     char *name)
+		     string_t name)
 {
   struct trivfs_control *peer;
 
@@ -2181,19 +2181,12 @@ S_term_get_peername (struct trivfs_protid *cred,
     return EOPNOTSUPP;
 
   if (!cred || (cred->pi.class != tty_class && cred->pi.class != pty_class))
-    {
-      if (cred)
-	ports_port_deref (cred);
-      return EOPNOTSUPP;
-    }
+    return EOPNOTSUPP;
 
   peer = (cred->pi.class == tty_class) ? ptyctl : termctl;
 
   if (bottom != &ptyio_bottom || !peer->hook)
-    {
-      ports_port_deref (cred);
-      return ENOENT;
-    }
+    return ENOENT;
 
   strcpy (name, (char *) peer->hook);
 

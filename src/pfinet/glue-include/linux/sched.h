@@ -79,7 +79,7 @@ struct semaphore { };
 
 
 static inline int
-suser ()
+suser (void)
 {
   return current->isroot;
 };
@@ -113,9 +113,23 @@ interruptible_sleep_on_timeout (struct wait_queue **p, struct timespec *tsp)
   isroot = current->isroot;	/* This is our context that needs switched.  */
   next_wait = current->next_wait; /* This too, for multiple schedule calls.  */
   current->next_wait = 0;
-  err = pthread_hurd_cond_timedwait_np(c, &global_lock, tsp);
-  if (err == EINTR)
-    current->signal = 1;	/* We got cancelled, mark it for later.  */
+
+  if (current->signal)
+    /* We already got interrupted previously, keep interrupting the
+       RPC.  */
+    err = EINTR;
+  else
+    {
+      /* This is the only place where we sleep within an RPC and release the global
+         lock while serving it.  */
+      err = pthread_hurd_cond_timedwait_np(c, &global_lock, tsp);
+
+      if (err == EINTR)
+        current->signal = 1;        /* We got cancelled, mark it for Linux code to bail out.  */
+      else
+        current->signal = 0;
+    }
+
   current->isroot = isroot;	/* Switch back to our context.  */
   current->next_wait = next_wait;
   return (err == ETIMEDOUT);

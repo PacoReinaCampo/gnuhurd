@@ -63,7 +63,7 @@ pager_memcpy (struct pager *pager, memory_object_t memobj,
 
 	  assert_backtrace (window_size >= VMCOPY_BETTER_THAN_MEMCPY);
 	  assert_backtrace ((window_size & (vm_page_size - 1)) == 0);
-	  
+
 	  window = 0;
 	  err = vm_map (mach_task_self (), &window, window_size, 0, 1,
 			memobj, offset, 0, prot, prot, VM_INHERIT_NONE);
@@ -127,19 +127,19 @@ pager_memcpy (struct pager *pager, memory_object_t memobj,
 		memcpy (other, (const void *) window + pageoff, copy_count);
 	      else
 		memcpy ((void *) window + pageoff, other, copy_count);
-	      
+
 	      vm_deallocate (mach_task_self (), window, window_size);
+
+	      assert_backtrace (n >= copy_count);
+	      assert_backtrace (to_copy >= copy_count);
 
 	      offset += copy_count;
 	      other += copy_count;
 	      to_copy -= copy_count;
 	      n -= copy_count;
-
-	      assert_backtrace (n >= 0);
-	      assert_backtrace (to_copy >= 0);
 	    }
 	  while (to_copy > 0);
-	  
+
 	  return 0;
 	}
 
@@ -156,7 +156,7 @@ pager_memcpy (struct pager *pager, memory_object_t memobj,
 			   - ((vm_address_t) other & (vm_page_size - 1)));
 	  if (err)
 	    return err;
-   
+
 	  assert_backtrace (n >= VMCOPY_BETTER_THAN_MEMCPY);
 
 	  err = do_vm_copy ();
@@ -208,9 +208,14 @@ pager_memcpy (struct pager *pager, memory_object_t memobj,
   window_size = 0;
 
   if (sigsetjmp (buf, 1) == 0)
-    hurd_catch_signal (sigmask (SIGSEGV) | sigmask (SIGBUS),
-		       window, window + window_size,
-		       &do_copy, (sighandler_t) &fault);
+    {
+      sigset_t mask;
+      sigemptyset (&mask);
+      sigaddset (&mask, SIGSEGV);
+      sigaddset (&mask, SIGBUS);
+      hurd_catch_signal (mask, window, window + window_size,
+		         &do_copy, (sighandler_t) &fault);
+    }
 
   if (! err)
     assert_backtrace (n == 0);

@@ -37,8 +37,8 @@
 const char *argp_program_version = STANDARD_HURD_VERSION (proc);
 
 #include "process_S.h"
-#include "notify_S.h"
 #include "../libports/interrupt_S.h"
+#include "../libports/notify_S.h"
 #include "proc_exc_S.h"
 #include "task_notify_S.h"
 
@@ -63,7 +63,7 @@ message_demuxer (mach_msg_header_t *inp,
 {
   mig_routine_t routine;
   if ((routine = process_server_routine (inp)) ||
-      (routine = notify_server_routine (inp)) ||
+      (routine = ports_notify_server_routine (inp)) ||
       (routine = ports_interrupt_server_routine (inp)) ||
       (routine = proc_exc_server_routine (inp)) ||
       (routine = task_notify_server_routine (inp)))
@@ -132,6 +132,7 @@ open_console (mach_port_t device_master)
 
   stdin = mach_open_devstream (cons, "r");
   stdout = stderr = mach_open_devstream (cons, "w");
+  setlinebuf (stderr);
 
   got_console = 1;
   mach_port_deallocate (mach_task_self (), cons);
@@ -219,8 +220,8 @@ main (int argc, char **argv, char **envp)
   _hurd_port_set (&_hurd_ports[INIT_PORT_AUTH], authserver);
   mach_port_deallocate (mach_task_self (), boot);
 
-  proc_death_notify (startup_proc);
   add_proc_to_hash (startup_proc); /* Now that we have the task port.  */
+  proc_death_notify (startup_proc);
 
   /* Set our own argv and envp locations.  */
   self_proc->p_argv = (vm_address_t) argv;

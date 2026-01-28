@@ -61,7 +61,9 @@ file_name_lookup_carefully (const char *name, int flags, mode_t mode)
 
       if (slash)
 	{
-	  *stpncpy (head = alloca (slash - name + 1), name, slash - name) = 0;
+	  char *str = alloca (slash - name + 1);
+	  *stpncpy (str, name, slash - name) = 0;
+	  head = str;
 	  tail = slash + 1;
 	}
       else

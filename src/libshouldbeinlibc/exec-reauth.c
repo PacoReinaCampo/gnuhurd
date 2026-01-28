@@ -60,22 +60,24 @@ exec_reauth (auth_t auth, int secure, int must_reauth,
 	    err = auth_user_authenticate (auth, ref, MACH_MSG_TYPE_MAKE_SEND,
 					  &newport);
 	  mach_port_mod_refs (mach_task_self (), ref, MACH_PORT_RIGHT_RECEIVE, -1);
+          /* If they gave us nothing, make sure not to proceed.  */
+          if (!err && newport == MACH_PORT_NULL)
+            err = KERN_INVALID_ARGUMENT;
 	  if (err)
-	    {
-	      if (must_reauth)
-		return err;
-	      /* Nothing Happens. */
-	    }
-	  else
-	    {
-	      if (isproc)
-		mach_port_deallocate (mach_task_self (), newport);
-	      else
-		{
-		  mach_port_deallocate (mach_task_self (), *port);
-		  *port = newport;
-		}
-	    }
+            return must_reauth ? err : 0;
+
+          if (isproc)
+            {
+              err = proc_reauthenticate_complete (newport);
+              if (err)
+                {
+                  mach_port_deallocate (mach_task_self (), newport);
+                  return must_reauth ? err : 0;
+                }
+            }
+
+          mach_port_deallocate (mach_task_self (), *port);
+          *port = newport;
 	}
       return 0;
     }
@@ -93,7 +95,7 @@ exec_reauth (auth_t auth, int secure, int must_reauth,
       else
 	err = reauth (&ports[INIT_PORT_CRDIR], 0);
     }
-  if (!err)
+  if (!err && !secure)
     err = reauth (&ports[INIT_PORT_PROC], 1);
   if (!err)
     err = reauth (&ports[INIT_PORT_CWDIR], 0);

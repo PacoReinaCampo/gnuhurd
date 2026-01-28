@@ -46,7 +46,7 @@ routine io_write (
 	offset: loff_t;
 	out amount: vm_size_t);
 
-/* Read data from an IO object.  If offset if -1, read from the object
+/* Read data from an IO object.  If offset is -1, read from the object
    maintained file pointer.  If the object is not seekable, offset is
    ignored.  The amount desired to be read is in AMOUNT.  */
 routine io_read (

@@ -96,7 +96,7 @@ static char *doc = "Set the passive/active translator on NODE."
 /* Authentication of the current process.  */
 uid_t *uids;
 gid_t *gids;
-size_t uids_len, gids_len;
+ssize_t uids_len, gids_len;
 
 /* Initialize and populate the uids and gids vectors.  */
 error_t
@@ -308,14 +308,15 @@ main(int argc, char *argv[])
 
       char buf[1024];
       argz = buf;
-      argz_len = sizeof (buf);
+      mach_msg_type_number_t argz_size = sizeof (buf);
 
-      err = file_get_translator (node, &argz, &argz_len);
+      err = file_get_translator (node, &argz, &argz_size);
       if (err == EINVAL)
 	error (4, 0, "%s: no passive translator record found", node_name);
       if (err)
 	error (4, err, "%s", node_name);
 
+      argz_len = argz_size;
       mach_port_deallocate (mach_task_self (), node);
     }
 
@@ -335,6 +336,7 @@ main(int argc, char *argv[])
 	    {
 	      fprintf (stderr, "Translator pid: %d\nPausing...",
 	               task2pid (task));
+	      fflush (stderr);
 	      getchar ();
 	    }
 
@@ -396,7 +398,11 @@ main(int argc, char *argv[])
 				 argz, argz_len,
 				 active_control, MACH_MSG_TYPE_COPY_SEND);
       if (err)
-	error (5, err, "%s", node_name);
+        {
+          if (active_control != MACH_PORT_NULL)
+            fsys_goaway (active_control, FSYS_GOAWAY_FORCE);
+          error (5, err, "%s", node_name);
+        }
     }
 
   if (chroot_command)

@@ -215,8 +215,14 @@ nowait_file_changed (mach_port_t notify_port, natural_t tickno,
     mach_msg_header_t Head;
     mach_msg_type_t ticknoType;
     natural_t tickno;
+#ifdef __LP64__
+    char ticknoPad[4];
+#endif
     mach_msg_type_t changeType;
     file_changed_type_t change;
+#ifdef __LP64__
+    char changePad[4];
+#endif
     mach_msg_type_t startType;
     loff_t start;
     mach_msg_type_t endType;
@@ -229,43 +235,43 @@ nowait_file_changed (mach_port_t notify_port, natural_t tickno,
   Request *InP = &Mess.In;
 
   static const mach_msg_type_t ticknoType = {
-    /* msgt_name = */           2,
-    /* msgt_size = */           32,
-    /* msgt_number = */         1,
-    /* msgt_inline = */         TRUE,
-    /* msgt_longform = */       FALSE,
-    /* msgt_deallocate = */     FALSE,
-    /* msgt_unused = */         0
-  };  
+    .msgt_name = MACH_MSG_TYPE_INTEGER_32,
+    .msgt_size = 32,
+    .msgt_number = 1,
+    .msgt_inline = TRUE,
+    .msgt_longform = FALSE,
+    .msgt_deallocate = FALSE,
+    .msgt_unused = 0
+  };
 
   static const mach_msg_type_t changeType = {
-    /* msgt_name = */		2,
-    /* msgt_size = */		32,
-    /* msgt_number = */		1,
-    /* msgt_inline = */		TRUE,
-    /* msgt_longform = */	FALSE,
-    /* msgt_deallocate = */	FALSE,
-    /* msgt_unused = */		0
+    .msgt_name = MACH_MSG_TYPE_INTEGER_32,
+    .msgt_size = 32,
+    .msgt_number = 1,
+    .msgt_inline = TRUE,
+    .msgt_longform = FALSE,
+    .msgt_deallocate = FALSE,
+    .msgt_unused = 0
   };
 
   static const mach_msg_type_t startType = {
-    /* msgt_name = */		11,
-    /* msgt_size = */		64,
-    /* msgt_number = */		1,
-    /* msgt_inline = */		TRUE,
-    /* msgt_longform = */	FALSE,
-    /* msgt_deallocate = */	FALSE,
-    /* msgt_unused = */		0
+    .msgt_name = MACH_MSG_TYPE_INTEGER_64,
+    .msgt_size = 64,
+    .msgt_number = 1,
+    .msgt_inline = TRUE,
+    .msgt_longform = FALSE,
+    .msgt_deallocate = FALSE,
+    .msgt_unused = 0
   };
 
   static const mach_msg_type_t endType = {
-    /* msgt_name = */		11,
-    /* msgt_size = */		64,
-    /* msgt_number = */		1,
-    /* msgt_inline = */		TRUE,
-    /* msgt_longform = */	FALSE,
-    /* msgt_deallocate = */	FALSE,
-    /* msgt_unused = */		0
+    .msgt_name = MACH_MSG_TYPE_INTEGER_64,
+    .msgt_size = 64,
+    .msgt_number = 1,
+    .msgt_inline = TRUE,
+    .msgt_longform = FALSE,
+    .msgt_deallocate = FALSE,
+    .msgt_unused = 0
   };
 
   InP->ticknoType = ticknoType;
@@ -286,11 +292,11 @@ nowait_file_changed (mach_port_t notify_port, natural_t tickno,
 
   if (notify == MACH_PORT_NULL)
     return mach_msg (&InP->Head, MACH_SEND_MSG | MACH_MSG_OPTION_NONE,
-		     64, 0, MACH_PORT_NULL, MACH_MSG_TIMEOUT_NONE,
+		     sizeof(Request), 0, MACH_PORT_NULL, MACH_MSG_TIMEOUT_NONE,
 		     MACH_PORT_NULL);
   else
     return mach_msg (&InP->Head, MACH_SEND_MSG | MACH_SEND_NOTIFY,
-		     64, 0, MACH_PORT_NULL, MACH_MSG_TIMEOUT_NONE,
+		     sizeof(Request), 0, MACH_PORT_NULL, MACH_MSG_TIMEOUT_NONE,
 		     notify);
 }
 
@@ -298,18 +304,11 @@ nowait_file_changed (mach_port_t notify_port, natural_t tickno,
 static void
 free_modreqs (struct modreq *mr)
 {
-  error_t err;
   struct modreq *tmp;
   for (; mr; mr = tmp)
     {
-      mach_port_t old;
       /* Cancel the dead-name notification.  */
-      err = mach_port_request_notification (mach_task_self (), mr->port,
-					    MACH_NOTIFY_DEAD_NAME, 0,
-					    MACH_PORT_NULL,
-					    MACH_MSG_TYPE_MAKE_SEND_ONCE, &old);
-      if (! err && MACH_PORT_VALID (old))
-	mach_port_deallocate (mach_task_self(), old);
+      ports_request_dead_name_notification (NULL, mr->port, NULL);
 
       /* Deallocate the user's port.  */
       mach_port_deallocate (mach_task_self (), mr->port);
@@ -320,22 +319,26 @@ free_modreqs (struct modreq *mr)
 
 /* A port deleted notification is generated when we deallocate the
    user's notify port before it is dead.  */
-error_t
+kern_return_t
 do_mach_notify_port_deleted (struct port_info *pi, mach_port_t name)
 {
   /* As we cancel the dead-name notification before deallocating the
      port, this should not happen.  */
-  assert_backtrace (0);
+  return EOPNOTSUPP;
 }
 
 /* We request dead name notifications for the user ports.  */
-error_t
+kern_return_t
 do_mach_notify_dead_name (struct port_info *pi, mach_port_t dead_name)
 {
   struct notify *notify_port = (struct notify *) pi;
   struct display *display;
   struct modreq **preq;
   struct modreq *req;
+
+  /* Forward any libports-requested notifications to them.  */
+  if (ports_port_is_notify (pi))
+    return ports_do_mach_notify_dead_name (pi, dead_name);
 
   if (!notify_port
       || notify_port->pi.bucket != notify_bucket
@@ -373,13 +376,13 @@ do_mach_notify_dead_name (struct port_info *pi, mach_port_t dead_name)
   return 0;
 }
 
-error_t
+kern_return_t
 do_mach_notify_port_destroyed (struct port_info *pi, mach_port_t rights)
 {
-  assert_backtrace (0);
+  return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 do_mach_notify_no_senders (struct port_info *pi, mach_port_mscount_t count)
 {
   return ports_do_mach_notify_no_senders (pi, count);
@@ -388,7 +391,7 @@ do_mach_notify_no_senders (struct port_info *pi, mach_port_mscount_t count)
 kern_return_t
 do_mach_notify_send_once (struct port_info *pi)
 {
-  return 0;
+  return EOPNOTSUPP;
 }
 
 kern_return_t
@@ -440,19 +443,11 @@ do_mach_notify_msg_accepted (struct port_info *pi, mach_port_t send)
 				 notify_port->pi.port_right);
       if (err && err != MACH_SEND_WILL_NOTIFY)
 	{
-	  error_t e;
-	  mach_port_t old;
 	  *preq = req->next;
 	  pthread_mutex_unlock (&display->lock);
 
 	  /* Cancel the dead-name notification.	 */
-	  e = mach_port_request_notification (mach_task_self (), req->port,
-					      MACH_NOTIFY_DEAD_NAME, 0,
-					      MACH_PORT_NULL,
-					      MACH_MSG_TYPE_MAKE_SEND_ONCE,
-					      &old);
-	  if (! e && MACH_PORT_VALID (old))
-	    mach_port_deallocate (mach_task_self(), old);
+          ports_request_dead_name_notification (NULL, req->port, NULL);
 
 	  mach_port_deallocate (mach_task_self (), req->port);
 	  free (req);
@@ -481,6 +476,8 @@ service_notifications (void *arg)
 {
   struct port_bucket *notify_bucket = arg;
   extern int notify_server (mach_msg_header_t *inp, mach_msg_header_t *outp);
+
+  pthread_setname_np (pthread_self (), "notifications");
 
   for (;;)
     ports_manage_port_operations_one_thread (notify_bucket,
@@ -513,7 +510,7 @@ display_notice_changes (display_t display, mach_port_t notify)
       return errno;
     }
 
-  notify_port = ports_get_right (display->notify_port);
+  notify_port = display->notify_port->pi.port_right;
 
   /* Request dead-name notification for the user's port.  */
   err = mach_port_request_notification (mach_task_self (), notify,
@@ -543,7 +540,7 @@ display_notice_filechange (display_t display)
   error_t err;
   struct modreq *req = display->filemod_reqs_pending;
   struct modreq **preq = &display->filemod_reqs;
-  mach_port_t notify_port = ports_get_right (display->notify_port);
+  mach_port_t notify_port = display->notify_port->pi.port_right;
 
   while (req)
     {
@@ -569,15 +566,8 @@ display_notice_filechange (display_t display)
 	    }
 	  else
 	    {
-	      error_t e;
-	      mach_port_t old;
-
 	      /* Cancel the dead-name notification.  */
-	      e = mach_port_request_notification (mach_task_self (), req->port,
-						  MACH_NOTIFY_DEAD_NAME, 0,
-						  MACH_PORT_NULL, 0, &old);
-	      if (! e && MACH_PORT_VALID (old))
-		mach_port_deallocate (mach_task_self(), old);
+              ports_request_dead_name_notification (NULL, req->port, NULL);
 	      mach_port_deallocate (mach_task_self (), req->port);
 	      free (req);
 	    }
@@ -1090,12 +1080,12 @@ void limit_cursor (display_t display)
 
   if (user->cursor.col >= user->screen.width)
     user->cursor.col = user->screen.width - 1;
-  else if (user->cursor.col < 0)
+  else if ((int32_t) user->cursor.col < 0)
     user->cursor.col = 0;
       
   if (user->cursor.row >= user->screen.height)
     user->cursor.row = user->screen.height - 1;
-  else if (user->cursor.row < 0)
+  else if ((int32_t) user->cursor.row < 0)
     user->cursor.row = 0;
   
   /* XXX Flag cursor change.  */
@@ -1914,7 +1904,8 @@ display_create (display_t *r_display, const char *encoding,
       ports_destroy_right (display->notify_port);
       free (display);
     }
-  *r_display = display;
+  else
+    *r_display = display;
   return err;
 }
 
@@ -2015,7 +2006,7 @@ display_get_owner (display_t display, pid_t *pid)
    NONBLOCK is not zero, return with -1 and set errno to EWOULDBLOCK
    if operation would block for a long time.  */
 ssize_t
-display_output (display_t display, int nonblock, char *data, size_t datalen)
+display_output (display_t display, int nonblock, const char *data, size_t datalen)
 {
   output_t output = &display->output;
   error_t err;
@@ -2075,7 +2066,7 @@ display_output (display_t display, int nonblock, char *data, size_t datalen)
     }
   else
     {
-      buffer = data;
+      buffer = (char*) data;
       buffer_size = datalen;
     }
   amount = buffer_size;

@@ -448,7 +448,7 @@ hit:
 	return sk;
 }
 
-__inline__ struct sock *tcp_v4_lookup(u32 saddr, u16 sport, u32 daddr, u16 dport, int dif)
+struct sock *tcp_v4_lookup(u32 saddr, u16 sport, u32 daddr, u16 dport, int dif)
 {
 	return __tcp_v4_lookup(0, saddr, sport, daddr, dport, dif);
 }

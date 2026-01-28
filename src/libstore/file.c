@@ -51,12 +51,20 @@ enforced (struct store *store)
 }
 
 static error_t
-file_read (struct store *store,
-	   store_offset_t addr, size_t index, size_t amount, void **buf,
-	   size_t *len)
+file_read (struct store *store, store_offset_t addr,
+           size_t index, size_t amount,
+           void **buf, size_t *len)
 {
+  error_t err;
   size_t bsize = store->block_size;
-  return io_read (store->port, (char **)buf, len, addr * bsize, amount);
+  mach_msg_type_number_t nread = *len;
+
+  err = io_read (store->port, (char **) buf, &nread, addr * bsize, amount);
+  if (err)
+    return err;
+
+  *len = nread;
+  return 0;
 }
 
 static error_t
@@ -66,6 +74,12 @@ file_write (struct store *store,
 {
   size_t bsize = store->block_size;
   return io_write (store->port, (void *) buf, len, addr * bsize, amount);
+}
+
+static error_t
+file_store_sync (struct store *store)
+{
+  return file_sync (store->port, 1, 0);
 }
 
 static error_t
@@ -215,18 +229,36 @@ file_map (const struct store *store, vm_prot_t prot, mach_port_t *memobj)
 const struct store_class
 store_file_class =
 {
-  STORAGE_HURD_FILE, "file", file_read, file_write, file_store_set_size,
-  store_std_leaf_allocate_encoding, store_std_leaf_encode, file_decode,
-  file_set_flags, file_clear_flags, 0, 0, 0, file_open, 0, file_map
+  .id = STORAGE_HURD_FILE,
+  .name = "file",
+  .read = file_read,
+  .write = file_write,
+  .set_size = file_store_set_size,
+  .allocate_encoding = store_std_leaf_allocate_encoding,
+  .encode = store_std_leaf_encode,
+  .decode = file_decode,
+  .set_flags = file_set_flags,
+  .clear_flags = file_clear_flags,
+  .open = file_open,
+  .map = file_map,
+  .sync = file_store_sync,
 };
 STORE_STD_CLASS (file);
 
 static error_t
-file_byte_read (struct store *store,
-		store_offset_t addr, size_t index, size_t amount,
-		void **buf, size_t *len)
+file_byte_read (struct store *store, store_offset_t addr,
+                size_t index, size_t amount,
+                void **buf, size_t *len)
 {
-  return io_read (store->port, (char **)buf, len, addr, amount);
+  error_t err;
+  mach_msg_type_number_t nread = *len;
+
+  err = io_read (store->port, (char **) buf, &nread, addr, amount);
+  if (err)
+    return err;
+
+  *len = nread;
+  return 0;
 }
 
 static error_t
@@ -255,16 +287,29 @@ store_file_create (file_t file, int flags, struct store **store)
   struct store_run run;
   struct stat stat;
   error_t err = io_stat (file, &stat);
+  size_t block_size;
+  size_t sector_size = 512;
 
   if (err)
     return err;
 
   run.start = 0;
-  run.length = stat.st_size;
+
+  /* Try to use a sector as block size.  */
+  if ((stat.st_size % sector_size) == 0)
+    {
+      block_size = sector_size;
+      run.length = stat.st_size / sector_size;
+    }
+  else
+    {
+      block_size = 1;
+      run.length = stat.st_size;
+    }
 
   flags |= STORE_ENFORCED;	/* 'cause it's the whole file.  */
 
-  return _store_file_create (file, flags, 1, &run, 1, store);
+  return _store_file_create (file, flags, block_size, &run, 1, store);
 }
 
 /* Like store_file_create, but doesn't query the file for information.  */

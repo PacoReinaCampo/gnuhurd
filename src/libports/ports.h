@@ -80,6 +80,8 @@ struct port_bucket
   int flags;
   int count;
   struct ports_threadpool threadpool;
+  /* A port in this bucket used to receive Mach notifications.  */
+  struct port_info *notify_port;
 };
 /* FLAGS above are the following: */
 #define PORT_BUCKET_INHIBITED	PORTS_INHIBITED
@@ -251,20 +253,20 @@ void *ports_lookup_port (struct port_bucket *bucket,
    this function is used, PAYLOAD must be a pointer to the port
    structure.  */
 extern void *ports_lookup_payload (struct port_bucket *bucket,
-				   unsigned long payload,
+				   uintptr_t payload,
 				   struct port_class *port_class);
 
 /* This returns the ports name.  This function can be used as
    intranpayload function turning payloads back into port names.  If
    this function is used, PAYLOAD must be a pointer to the port
    structure.  */
-extern mach_port_t ports_payload_get_name (unsigned int payload);
+extern mach_port_t ports_payload_get_name (uintptr_t payload);
 
 #if (defined(__USE_EXTERN_INLINES) || defined(PORTS_DEFINE_EI)) && !defined(__cplusplus)
 
 PORTS_EI void *
 ports_lookup_payload (struct port_bucket *bucket,
-		      unsigned long payload,
+		      uintptr_t payload,
 		      struct port_class *class)
 {
   struct port_info *pi = (struct port_info *) payload;
@@ -285,7 +287,7 @@ ports_lookup_payload (struct port_bucket *bucket,
 }
 
 PORTS_EI mach_port_t
-ports_payload_get_name (unsigned int payload)
+ports_payload_get_name (uintptr_t payload)
 {
   struct port_info *pi = (struct port_info *) payload;
 
@@ -308,6 +310,25 @@ void ports_port_deref (void *port);
 
 /* Drop a weak reference to PORT. */
 void ports_port_deref_weak (void *port);
+
+/* Use this port right to request notifications about PORT. */
+#define ports_port_notify_right(port) \
+  ((struct port_info *) (port))->bucket->notify_port->port_right
+
+/* Is PORT the notify port for its bucket? */
+#define ports_port_is_notify(port)                  \
+  ({                                                \
+    struct port_info *__pi = (port);                \
+    __pi ? (__pi->bucket->notify_port == __pi) : 0; \
+  })
+
+/* Request a dead-name notification for NAME on behalf of OBJECT.
+   If PREVIOUS is null, deallocate any previously registered port,
+   otherwise return it.  If OBJECT is null, cancel the previously
+   registered notification.  */
+error_t ports_request_dead_name_notification (void *object,
+                                              mach_port_t name,
+                                              mach_port_t *previous);
 
 /* The user is responsible for listening for no senders notifications;
    when one arrives, call this routine for the PORT the message was
@@ -415,7 +436,7 @@ void ports_interrupt_rpcs (void *port);
 
 /* If the current thread's rpc has been interrupted with
    ports_interrupt_rpcs, return true (and clear the interrupted flag).  */
-int ports_self_interrupted ();
+int ports_self_interrupted (void);
 
 /* Add RPC to the list of rpcs that have been interrupted.  */
 void _ports_record_interruption (struct rpc_info *rpc);
@@ -461,6 +482,8 @@ extern kern_return_t
  ports_do_mach_notify_port_destroyed (struct port_info *pi, mach_port_t name);
 extern kern_return_t
  ports_do_mach_notify_send_once (struct port_info *pi);
+
+extern boolean_t ports_interrupt_server (mach_msg_header_t *, mach_msg_header_t *);
 
 /* Private data */
 extern pthread_mutex_t _ports_lock;

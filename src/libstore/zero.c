@@ -51,6 +51,7 @@ zero_write (struct store *store,
 	    store_offset_t addr, size_t index, const void *buf, size_t len,
 	    size_t *amount)
 {
+  *amount = len;
   return 0;
 }
 
@@ -150,8 +151,9 @@ zero_open (const char *name, int flags,
     }
   else
     {
-      store_offset_t max_offs = ~((store_offset_t)1
-				  << (CHAR_BIT * sizeof (store_offset_t) - 1));
+      store_offset_t max_offs = (
+	  ((store_offset_t)1 << (CHAR_BIT * sizeof (store_offset_t) - 2))
+	  - 1) * 2 + 1;
       return store_zero_create (max_offs, flags, store);
     }
 }

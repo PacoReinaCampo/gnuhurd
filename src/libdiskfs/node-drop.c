@@ -38,10 +38,13 @@ diskfs_drop_node (struct node *np)
 {
   mode_t savemode;
 
-  if (np->dn_stat.st_nlink == 0)
+  /* XXX: if the filesystem is readonly, we cannot remove the files with no link
+     but e.g. memory mapping still in memory.  This notably happens when
+     upgrading packages without restarting the corresponding processes.  Fsck
+     will have to fix them.  */
+  if (np->dn_stat.st_nlink == 0 && !diskfs_readonly)
     {
       diskfs_check_readonly ();
-      assert_backtrace (!diskfs_readonly);
 
       if (np->dn_stat.st_mode & S_IPTRANS)
 	diskfs_set_translator (np, 0, 0, 0);

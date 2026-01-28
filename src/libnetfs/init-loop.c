@@ -19,14 +19,17 @@
    Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111, USA. */
 
 #include "netfs.h"
+#include <pthread.h>
 
 static int thread_timeout = 1000 * 60 * 2; /* two minutes */
 static int server_timeout = 1000 * 60 * 10; /* ten minutes */
 
 void
-netfs_server_loop ()
+netfs_server_loop (void)
 {
   error_t err;
+
+  pthread_setname_np (pthread_self (), "netfs");
 
   do 
     {

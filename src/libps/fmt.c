@@ -49,7 +49,7 @@ _fmt_create (char *src, int posix, struct ps_fmt_specs *fmt_specs,
     return ENOMEM;
 
   new_fmt = NEW (struct ps_fmt);
-  if (fmt == NULL)
+  if (new_fmt == NULL)
     {
       FREE (fields);
       return ENOMEM;
@@ -177,14 +177,15 @@ _fmt_create (char *src, int posix, struct ps_fmt_specs *fmt_specs,
 	      /* if we didn't use any chars, don't loop indefinitely */
 	      if (src == start)
 		{
+		  int err = 0;
 		  if (err_string)
-		    asprintf (err_string, "%s: Unknown format spec", src);
+		    err = asprintf (err_string, "%s: Unknown format spec", src);
 
 		  FREE (new_fmt->src);
 		  FREE (new_fmt);
 		  FREE (fields);
 
-		  return EINVAL;
+		  return err != -1 ? EINVAL : ENOMEM;
 		}
 
 	      global_clr_flags = clr_flags;
@@ -246,14 +247,15 @@ _fmt_create (char *src, int posix, struct ps_fmt_specs *fmt_specs,
 	  if (! field->spec)
 	    /* Failed to find any named spec called NAME.  */
 	    {
+	      int err = 0;
 	      if (err_string)
-		asprintf (err_string, "%s: Unknown format spec", name);
+		err = asprintf (err_string, "%s: Unknown format spec", name);
 
 	      FREE (new_fmt->src);
 	      FREE (fields);
 	      FREE (new_fmt);
 
-	      return EINVAL;
+	      return err != -1 ? EINVAL : ENOMEM;
 	    }
 
 	  if (! field->title)
@@ -337,7 +339,10 @@ ps_fmt_creation_error (char *src, int posix, struct ps_fmt_specs *fmt_specs,
   struct ps_fmt *fmt;
   error_t err = _fmt_create (src, posix, fmt_specs, &fmt, error);
   if (err != EINVAL)		/* ? */
-    asprintf (error, "%s", strerror (err));
+    {
+      int err2 = asprintf (error, "%s", strerror (err));
+      assert_backtrace (err2 != -1);
+    }
   if (! err)
     ps_fmt_free (fmt);
 }

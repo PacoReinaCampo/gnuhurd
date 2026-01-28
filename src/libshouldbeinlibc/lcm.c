@@ -23,7 +23,7 @@
 /* There are probably more efficient ways to do these...  */
 
 /* Return the greatest common divisor of p & q.  */
-inline long
+static inline long
 gcd (long p, long q)
 {
   if (p == 0)

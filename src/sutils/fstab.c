@@ -79,7 +79,7 @@ fstypes_create (const char *search_fmts, size_t search_fmts_len,
       new->program_search_fmts_len = search_fmts_len;
       if (! new->program_search_fmts)
 	{
-	  free (types);
+	  free (new);
 	  return ENOMEM;
 	}
       bcopy (search_fmts, new->program_search_fmts, search_fmts_len);
@@ -117,9 +117,13 @@ fstypes_get (struct fstypes *types, const char *name, struct fstype **fstype)
 
   for (fmt = fmts; fmt; fmt = argz_next (fmts, fmts_len, fmt))
     {
+      int err;
       int fd;
 
-      asprintf (&program, fmt, name);
+      err = asprintf (&program, fmt, name);
+      if (err == -1)
+	return errno;
+
       fd = open (program, O_EXEC);
       if (fd < 0)
 	{
@@ -163,6 +167,7 @@ fstypes_get (struct fstypes *types, const char *name, struct fstype **fstype)
   type->name = strdup (name);
   if (type->name == 0)
     {
+      free (program);
       free (type);
       return ENOMEM;
     }
@@ -490,7 +495,8 @@ fs_remount (struct fs *fs)
 inline struct fs *
 fstab_find_device (const struct fstab *fstab, const char *name)
 {
-  if (strcmp (name, "none") == 0 || strcmp (name, "proc") == 0)
+  if (strcmp (name, "none") == 0 || strcmp (name, "proc") == 0
+      || strcmp (name, "procfs") == 0)
     return NULL;
 
   char *real_name = realpath (name, NULL);

@@ -122,14 +122,16 @@ main (int argc, char **argv)
     }
 }
 
-error_t
+kern_return_t
 S_fsys_getroot (mach_port_t fsys_t,
 		mach_port_t dotdotnode,
-		uid_t *uids, size_t nuids,
-		uid_t *gids, size_t ngids,
+		const id_t *uids,
+		mach_msg_type_number_t nuids,
+		const id_t *gids,
+		mach_msg_type_number_t ngids,
 		int flags,
 		retry_type *do_retry,
-		char *retry_name,
+		string_t retry_name,
 		mach_port_t *ret,
 		mach_msg_type_name_t *rettype)
 {
@@ -162,13 +164,13 @@ S_fsys_getroot (mach_port_t fsys_t,
   return 0;
 }
 
-error_t
+kern_return_t
 S_fsys_goaway (mach_port_t control, int flags)
 {
   exit (0);
 }
 
-error_t
+kern_return_t
 S_fsys_syncfs (mach_port_t control,
 	       int wait,
 	       int recurse)

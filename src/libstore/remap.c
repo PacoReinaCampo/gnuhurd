@@ -42,6 +42,12 @@ remap_write (struct store *store,
 }
 
 static error_t
+remap_sync (struct store *store)
+{
+  return store_sync (store->children[0]);
+}
+
+static error_t
 remap_set_size (struct store *store, size_t newsize)
 {
   return store_set_size (store->children[0], newsize);
@@ -206,11 +212,19 @@ remap_validate_name (const char *name,
 const struct store_class
 store_remap_class =
 {
-  STORAGE_REMAP, "remap", remap_read, remap_write, remap_set_size,
-  remap_allocate_encoding, remap_encode, remap_decode,
-  store_set_child_flags, store_clear_child_flags,
-  NULL, NULL, NULL,		/* cleanup, clone, remap */
-  remap_open, remap_validate_name
+  .id = STORAGE_REMAP,
+  .name = "remap",
+  .read = remap_read,
+  .write = remap_write,
+  .set_size = remap_set_size,
+  .allocate_encoding = remap_allocate_encoding,
+  .encode = remap_encode,
+  .decode = remap_decode,
+  .set_flags = store_set_child_flags,
+  .clear_flags = store_clear_child_flags,
+  .open = remap_open,
+  .validate_name = remap_validate_name,
+  .sync = remap_sync,
 };
 STORE_STD_CLASS (remap);
 

@@ -150,9 +150,11 @@ trivfs_append_args (struct trivfs_control *fsys,
 
   if (MACH_PORT_VALID (opt_device_master))
     {
-      asprintf (&opt, "--device-master-port=%lu", opt_device_master);
+      int err2 = asprintf (&opt, "--device-master-port=%u", opt_device_master);
 
-      if (opt)
+      if (err2 == -1)
+	err = errno;
+      else
 	{
 	  err = argz_add (argz, argz_len, opt);
 	  free (opt);
@@ -187,6 +189,7 @@ open_console (mach_port_t device_master)
 
   stdin = mach_open_devstream (cons, "r");
   stdout = stderr = mach_open_devstream (cons, "w");
+  setlinebuf (stderr);
 
   got_console = 1;
   mach_port_deallocate (mach_task_self (), cons);

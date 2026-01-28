@@ -25,8 +25,8 @@ trivfs_S_file_set_translator (struct trivfs_protid *cred,
 			      int actflags,
 			      int passflags,
 			      int oldtransflags,
-			      data_t trans,
-			      size_t translen,
+			      const_data_t trans,
+			      mach_msg_type_number_t translen,
 			      mach_port_t existing)
 {
   return EOPNOTSUPP;

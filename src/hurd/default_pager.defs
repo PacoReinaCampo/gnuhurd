@@ -65,24 +65,15 @@ routine default_pager_object_pages(
 	out	pages			: default_pager_page_array_t,
 			CountInOut, Dealloc);
 
-/* This is the original Mach call, now deprecated in favor
-   of default_pager_paging_storage.  */
-routine default_pager_paging_file(
-		default_pager		: mach_port_t;
-		master_device_port	: mach_port_t;
-		filename		: default_pager_filename_t;
-		add			: boolean_t);
+skip;				/* default_pager_paging_file */
 
 skip;				/* default_pager_register_fileserver */
 
-/* Add or remove an area of paging storage, which is a subset of the
-   Mach device for which device_open returned DEVICE_PORT.  The area
-   consists of the concatenation of contiguous regions described by
-   RUNS.  Each even-numbered element of RUNS gives the starting record
-   number of a region whose length is given by the next odd-numbered
-   element.  NAME is used in any diagnostics the default pager prints
-   about device errors when paging.  When removing a paging area, NAME
-   and RUNS must match exactly.  */
+#ifdef __i386__
+/* Deprecated RPC to add or remove an area of paging storage.
+ * Was superseded in favor of default_pager_paging_storage_new which
+ * uses the correct type for default_pager_filename_t using c_string.
+ */
 routine default_pager_paging_storage(
 		default_pager		: mach_port_t;
 		device_port		: mach_port_t;
@@ -90,6 +81,9 @@ routine default_pager_paging_storage(
 		       array[] of recnum_t;
 		name			: default_pager_filename_t;
 		add			: boolean_t);
+#else
+skip;  /* default_pager_paging_storage */
+#endif
 
 /* This call is made on a memory object returned by default_pager_object_create
    to fix the object's maximum size.  Any references to pages beyond the limit
@@ -107,3 +101,21 @@ routine default_pager_storage_info(
 			array[] of vm_size_t, dealloc;
 	out	name			: data_t);
 
+type new_default_pager_filename_t = c_string[256]
+	ctype: default_pager_filename_t;
+
+/* Add or remove an area of paging storage, which is a subset of the
+   Mach device for which device_open returned DEVICE_PORT.  The area
+   consists of the concatenation of contiguous regions described by
+   RUNS.  Each even-numbered element of RUNS gives the starting record
+   number of a region whose length is given by the next odd-numbered
+   element.  NAME is used in any diagnostics the default pager prints
+   about device errors when paging.  When removing a paging area, NAME
+   and RUNS must match exactly.  */
+routine default_pager_paging_storage_new(
+		default_pager		: mach_port_t;
+		device_port		: mach_port_t;
+		runs			: recnum_array_t =
+		       array[] of recnum_t;
+		name			: new_default_pager_filename_t;
+		add			: boolean_t);

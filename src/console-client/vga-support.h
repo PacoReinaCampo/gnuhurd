@@ -41,6 +41,15 @@ error_t vga_init (void);
    hardware access.  */
 void vga_fini (void);
 
+/* Non-optimized memset for vga_videomem */
+void vga_memset (void *__restrict s, int c, size_t n);
+
+/* Non-optimized memcpy for vga_videomem */
+void vga_memcpy (void *__restrict dest, const void *__restrict src, size_t n);
+
+/* Non-optimized memmove for vga_videomem */
+void vga_memmove (void *dest, const void *src, size_t n);
+
 /* Write DATALEN bytes from DATA to the font buffer BUFFER, starting
    from glyph index.  */
 void vga_write_font_buffer (int buffer, int index,

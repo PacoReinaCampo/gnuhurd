@@ -40,13 +40,13 @@ struct machdev_device_emulation_ops
   void (*dealloc) (void *);
   mach_port_t (*dev_to_port) (void *);
   io_return_t (*open) (mach_port_t, mach_msg_type_name_t,
-		       dev_mode_t, char *, device_t *,
+		       dev_mode_t, const char *, device_t *,
 		       mach_msg_type_name_t *type);
   io_return_t (*close) (void *);
   io_return_t (*write) (void *, mach_port_t, mach_msg_type_name_t,
 			dev_mode_t, recnum_t, io_buf_ptr_t, unsigned, int *);
   io_return_t (*write_inband) (void *, mach_port_t, mach_msg_type_name_t,
-			       dev_mode_t, recnum_t, io_buf_ptr_inband_t,
+			       dev_mode_t, recnum_t, const char *,
 			       unsigned, int *);
   io_return_t (*read) (void *, mach_port_t, mach_msg_type_name_t,
 		       dev_mode_t, recnum_t, int, io_buf_ptr_t *, unsigned *);
@@ -64,7 +64,7 @@ struct machdev_device_emulation_ops
 			     recnum_t, vm_offset_t, vm_size_t);
   io_return_t (*writev_trap) (void *, dev_mode_t,
 			      recnum_t, io_buf_vec_t *, vm_size_t);
-  void (*shutdown) (void);
+  void (*sync) (void);
 };
 
 #endif /* _MACHDEV_DEVICE_EMUL_H_ */

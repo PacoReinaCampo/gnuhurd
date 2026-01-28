@@ -246,7 +246,9 @@ input_loop (void *unused)
   kd_event *ev;
   vm_offset_t buf;
   mach_msg_type_number_t buf_size;
-  
+
+  pthread_setname_np (pthread_self (), "mouse_input");
+
   while (1)
     {
       struct mouse_event evt = { 0 };

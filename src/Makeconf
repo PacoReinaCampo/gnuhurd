@@ -78,8 +78,9 @@ INCLUDES += -I$(..)include -I$(top_srcdir)/include
 CPPFLAGS += $(INCLUDES) \
 	     -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 \
 	    $($*-CPPFLAGS)
-CFLAGS += -std=gnu99 $(gnu89-inline-CFLAGS) -Wall -g -O3 \
-	    -fno-strict-aliasing $($*-CFLAGS)
+CFLAGS += -std=gnu99 $(gnu89-inline-CFLAGS) -Wall -Werror=old-style-definition \
+					-Werror=implicit-function-declaration -Werror=strict-prototypes \
+					-g -O3 -fno-strict-aliasing $($*-CFLAGS)
 
 # Include the configure-generated file of parameters.
 # This sets up variables for build tools and installation directories.
@@ -348,7 +349,7 @@ $(progtarg): %$(target-suffix): $(BUGADDR)
 
 $(addsuffix .static,$(progtarg)): %$(target-suffix).static: $(BUGADDR)
 	$(link-executable) -static \
-	      '-Wl,-(' $(patsubst %.so,%.a,$^) $($*-LDLIBS) $(LDLIBS) \
+	      '-Wl,-(' $(patsubst %.so,%.a,$^) $($*.static-LDLIBS) $(LDLIBS) \
 	      '-Wl,-)' \
 	      $(and $(filter %/libstore_part.a,$^), $(PARTED_LIBS))
 endif
@@ -358,7 +359,7 @@ $(addsuffix .prof,$(progtarg)): %$(target-suffix).prof: $(BUGADDR)
 	$(CC) -pg $(CFLAGS) $($*-CFLAGS) $(LDFLAGS) $($*-LDFLAGS) \
 		$(BUGADDR_REF) -static \
 		-o $@ \
-		'-Wl,-(' $^ $($*-LDLIBS) $(LDLIBS) \
+		'-Wl,-(' $^ $($*.static-LDLIBS) $(LDLIBS) \
 		'-Wl,-)'
 
 ifeq ($(makemode),library)
@@ -460,7 +461,7 @@ dist.tar: $(DISTFILES) FORCE
 clean:
 	rm -f dist.tar
 ifeq ($(clean),yes)
-	rm -f *.d *.o *Server.c *User.c *_S.h *_U.h *.[su]defsi \
+	rm -f *.d *.o *Server.c *User.c *_S.h *_U.h *.[su]defsi *.stamp \
 	      $(cleantarg)
 endif
 
@@ -503,6 +504,9 @@ endif
 
 # Tell make where to find other -l libraries that we use
 vpath libutil.% $(libdir)/
+vpath libpthread.% $(libdir)/
+vpath libbz2.% $(libdir)/
+vpath libz.% $(libdir)/
 
 # The libstore_%.a files fetch symbols from libstore.so
 ifneq ($(dir),libstore)
@@ -546,7 +550,7 @@ MIGCOMFLAGS := -subrprefix __
 # But it's convenient to be able to explicitly make the intermediate
 # files when you want to deal with a problem in the MiG stub generator.
 
-%.sdefsi %.sdefs.d: %.defs
+%.sdefs.stamp: %.defs
 	$(CPP) $(CPPFLAGS) $(MIGSFLAGS) $($*-MIGSFLAGS) -DSERVERPREFIX=S_ \
 	  -DHURD_SERVER=1 \
 	  -MD -MF $*.sdefs.d.new \
@@ -554,23 +558,35 @@ MIGCOMFLAGS := -subrprefix __
 	sed -e 's#[^:]*:#$*Server.c $(mig-sheader-prefix)$*_S.h:#' \
 	  < $*.sdefs.d.new > $*.sdefs.d
 	rm $*.sdefs.d.new
+	touch $@
+%.sdefsi %.sdefs.d: %.sdefs.stamp
+	:
 
-$(mig-sheader-prefix)%_S.h %Server.c: %.sdefsi
+%Server.stamp: %.sdefsi
 	$(MIGCOM) $(MIGCOMFLAGS) $(MIGCOMSFLAGS) $($*-MIGCOMSFLAGS) \
 		    -sheader $(mig-sheader-prefix)$*_S.h -server $*Server.c \
 		    -user /dev/null -header /dev/null < $<
+	touch $@
+$(mig-sheader-prefix)%_S.h %Server.c: %Server.stamp
+	:
 
-%.udefsi %.udefs.d: %.defs
+%.udefs.stamp: %.defs
 	$(CPP) $(CPPFLAGS) $(MIGUFLAGS) $($*-MIGUFLAGS) \
 	  -MD -MF $*.udefs.d.new \
 	  $< -o $*.udefsi
 	sed -e 's#[^:]*:#$*User.c $*_U.h:#' \
 	  < $*.udefs.d.new > $*.udefs.d
 	rm $*.udefs.d.new
+	touch $@
+%.udefsi %.udefs.d: %.udefs.stamp
+	:
 
-%_U.h %User.c: %.udefsi
+%User.stamp: %.udefsi
 	$(MIGCOM) $(MIGCOMFLAGS) $(MIGCOMUFLAGS) $($*-MIGCOMUFLAGS) < $< \
 		  -user $*User.c -server /dev/null -header $*_U.h
+	touch $@
+%_U.h %User.c: %User.stamp
+	:
 
 # Where to find .defs files.
 vpath %.defs $(top_srcdir)/hurd
@@ -594,7 +610,7 @@ device_defs = $(addsuffix .defs,$(device_defs_names))
 $(mach_defs): %.defs:
 	echo '#include <mach/$@>' > $@
 $(mach_i386_defs): %.defs:
-	echo '#include <mach/i386/$@>' > $@
+	echo '#include <mach/machine/$@>' > $@
 $(mach_debug_defs): %.defs:
 	echo '#include <mach_debug/$@>' > $@
 $(device_defs): %.defs:

@@ -33,7 +33,10 @@ diskfs_S_io_prenotify (struct protid *cred,
   
   if (!cred)
     return EOPNOTSUPP;
-  
+
+  if (diskfs_check_readonly ())
+    return EROFS;
+
   np = cred->po->np;
 
   /* Clamp it down */

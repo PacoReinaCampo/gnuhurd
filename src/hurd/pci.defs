@@ -23,8 +23,9 @@ subsystem pci 39000;
 
 #ifdef PCI_IMPORTS
 PCI_IMPORTS
-INTR_INTERFACE
 #endif
+
+INTR_INTERFACE
 
 /*
  * Read 'amount' bytes from offset 'reg' in the
@@ -51,7 +52,7 @@ routine pci_conf_write(
  */
 routine pci_get_ndevs(
 	master: pci_t;
-	out ndevs: vm_size_t
+	out ndevs: mach_msg_type_number_t
 );
 
 /*

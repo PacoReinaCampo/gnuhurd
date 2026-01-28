@@ -1,6 +1,6 @@
 /* Definitions for process server interface (request-only version)
 
-   Copyright (C) 1992, 93, 94, 95, 96, 98, 2013 Free Software Foundation, Inc.
+   Copyright (C) 1992, 93, 94, 95, 96, 98, 2013, 21 Free Software Foundation, Inc.
 
 This file is part of the GNU Hurd.
 
@@ -86,13 +86,14 @@ simpleroutine proc_register_version_request (
    a new process, just create a new task and use proc_task2proc. */
 
 /* Change the current authentication of the process.  The user should
-   follow this call with a call to auth_user_authenticate.  The
-   new_port passed back through the auth server will be
-   MACH_PORT_NULL.  */
+   follow this call with a call to auth_user_authenticate, and then a
+   call to proc_reauthenticate_complete on the port passed back
+   through the auth server, which becomes the new port for this process.
+   The old process port is destroyed.  */
 simpleroutine proc_reauthenticate_request (
 	process: process_t;
 	ureplyport reply: reply_port_t;
-	rendezvous2: mach_port_send_t);
+	rendezvous: mach_port_send_t);
 
 /* Declare that a task is a child of the caller.  The task's state
    will then inherit from the caller.  This call can be made only once
@@ -124,8 +125,7 @@ simpleroutine proc_reassign_request (
 	ureplyport reply: reply_port_t;
 	newtask: task_t);
 
-/* Set the owner of the process.  The new owner must be within the
-   current authentication of the caller.  */
+/* Deprecated; definition kept for compatibility. */
 simpleroutine proc_setowner_request (
 	process: process_t;
 	ureplyport reply: reply_port_t;
@@ -423,3 +423,8 @@ skip; /* proc_get_exe */
 
 skip; /* proc_set_entry */
 skip; /* proc_get_entry */
+
+skip; /* proc_waitid */
+
+skip; /* proc_reauthenticate_reassign */
+skip; /* proc_reauthenticate_complete */

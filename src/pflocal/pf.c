@@ -21,6 +21,7 @@
 #include <stddef.h>
 #include <sys/socket.h>
 #include <hurd/pipe.h>
+#include <hurd/trivfs.h>
 
 #include "sock.h"
 
@@ -28,8 +29,8 @@
 
 /* Create a new socket.  Sock type is, for example, SOCK_STREAM,
    SOCK_DGRAM, or some such.  */
-error_t
-S_socket_create (mach_port_t pf,
+kern_return_t
+S_socket_create (trivfs_protid_t pf,
 		 int sock_type, int protocol,
 		 mach_port_t *port, mach_msg_type_name_t *port_type)
 {
@@ -77,20 +78,29 @@ S_socket_create (mach_port_t pf,
       else
 	*port_type = MACH_MSG_TYPE_MAKE_SEND;
     }
+
+  if (!err)
+    {
+      if (pf->user->uids->num > 0)
+	sock->uid = pf->user->uids->ids[0];
+      if (pf->user->gids->num > 0)
+	sock->gid = pf->user->gids->ids[0];
+    }
   
   return err;
 }
 
-error_t
+kern_return_t
 S_socket_create_address (mach_port_t pf, int sockaddr_type,
-			 data_t data, size_t data_len,
+			 const_data_t data,
+			 mach_msg_type_number_t data_len,
 			 mach_port_t *addr_port,
 			 mach_msg_type_name_t *addr_port_type)
 {
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_socket_fabricate_address (mach_port_t pf,
 			    int sockaddr_type,
 			    mach_port_t *addr_port,
@@ -118,13 +128,14 @@ S_socket_fabricate_address (mach_port_t pf,
    the file name.  This is primarily for the implementation of accept
    and recvfrom.  The functions getsockname and getpeername remain
    unsupported for the local namespace.  */
-error_t
+kern_return_t
 S_socket_whatis_address (struct addr *addr,
 			 int *sockaddr_type,
-			 data_t *sockaddr, size_t *sockaddr_len)
+			 data_t *sockaddr,
+			 mach_msg_type_number_t *sockaddr_len)
 {
   socklen_t addr_len = (offsetof (struct sockaddr, sa_data) + 1);
-  
+
   if (! addr)
     return EOPNOTSUPP;
 
@@ -135,6 +146,6 @@ S_socket_whatis_address (struct addr *addr,
   ((struct sockaddr *) *sockaddr)->sa_family = *sockaddr_type;
   ((struct sockaddr *) *sockaddr)->sa_data[0] = 0;
   *sockaddr_len = addr_len;
-  
+
   return 0;
 }

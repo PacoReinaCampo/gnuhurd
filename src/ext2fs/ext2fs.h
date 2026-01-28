@@ -32,8 +32,7 @@
 #include <assert-backtrace.h>
 #include <pthread.h>
 #include <sys/mman.h>
-
-#define __hurd__		/* Enable some hurd-specific fields.  */
+#include <endian.h>
 
 /* Types used by the ext2 header files.  */
 typedef u_int32_t __u32;
@@ -44,9 +43,6 @@ typedef u_int8_t  __u8;
 typedef int8_t    __s8;
 
 #include "ext2_fs.h"
-#include "ext2_fs_i.h"
-
-#define i_mode_high	osd2.hurd2.h_i_mode_high /* missing from ext2_fs.h */
 
 
 /* If ext2_fs.h defined a debug routine, undef it and use our own.  */
@@ -62,8 +58,6 @@ extern int ext2_debug_flag;
 #else
 #define ext2_debug(f, a...)	(void)0
 #endif
-
-#undef __hurd__
 
 /* Define this if memory objects should not be cached by the kernel.
    Normally, don't define it, but defining it causes a much greater rate
@@ -133,7 +127,7 @@ EXT2FS_EI int
 test_bit (unsigned num, unsigned char *bitmap)
 {
   const uint32_t *const bw = (uint32_t *) bitmap + (num >> 5);
-  const uint_fast32_t mask = 1 << (num & 31);
+  const uint_fast32_t mask = 1U << (num & 31);
   return *bw & mask;
 }
 
@@ -143,7 +137,7 @@ EXT2FS_EI int
 set_bit (unsigned num, unsigned char *bitmap)
 {
   uint32_t *const bw = (uint32_t *) bitmap + (num >> 5);
-  const uint_fast32_t mask = 1 << (num & 31);
+  const uint_fast32_t mask = 1U << (num & 31);
   return (*bw & mask) ?: (*bw |= mask, 0);
 }
 
@@ -153,7 +147,7 @@ EXT2FS_EI int
 clear_bit (unsigned num, unsigned char *bitmap)
 {
   uint32_t *const bw = (uint32_t *) bitmap + (num >> 5);
-  const uint_fast32_t mask = 1 << (num & 31);
+  const uint_fast32_t mask = 1U << (num & 31);
   return (*bw & mask) ? (*bw &= ~mask, mask) : 0;
 }
 #endif /* Use extern inlines.  */
@@ -287,6 +281,8 @@ int disk_cache_block_is_ref (block_t block);
 extern struct ext2_super_block *sblock;
 /* True if sblock has been modified.  */
 extern int sblock_dirty;
+/* Size of one inode. */
+extern uint16_t global_inode_size;
 
 /* Where the super-block is located on disk (at min-block 1).  */
 #define SBLOCK_BLOCK	1	/* Default location, second 1k block.  */
@@ -300,7 +296,7 @@ extern unsigned int block_size;
 extern unsigned int log2_block_size;
 
 /* The number of bits to scale min-blocks to get filesystem blocks.  */
-#define BLOCKSIZE_SCALE	(sblock->s_log_block_size)
+#define BLOCKSIZE_SCALE	(le32toh (sblock->s_log_block_size))
 
 /* log2 of the number of device blocks in a filesystem block.  */
 extern unsigned log2_dev_blocks_per_fs_block;
@@ -313,13 +309,13 @@ extern vm_address_t zeroblock;
 
 /* Get the superblock from the disk, point `sblock' to it, and setup
    various global info from it.  */
-void get_hypermetadata ();
+void get_hypermetadata (void);
 
 /* Map `group_desc_image' pointers to disk cache.  Also, establish a
    non-exported mapping to the superblock that will be used by
    diskfs_set_hypermetadata to update the superblock from the cache
    `sblock' points to.  */
-void map_hypermetadata ();
+void map_hypermetadata (void);
 
 /* ---------------------------------------------------------------- */
 /* Random stuff calculated from the super block.  */
@@ -411,7 +407,11 @@ bptr_offs (void *ptr)
 #define group_desc(num)	(&group_desc_image[num])
 extern struct ext2_group_desc *group_desc_image;
 
-#define inode_group_num(inum) (((inum) - 1) / sblock->s_inodes_per_group)
+#define group_desc_block (boffs_block (SBLOCK_OFFS) + 1)
+#define group_desc_size (groups_count * sizeof(struct ext2_group_desc))
+#define group_desc_block_end (group_desc_block + boffs_block(round_block(group_desc_size)))
+
+#define inode_group_num(inum) (((inum) - 1) / le32toh (sblock->s_inodes_per_group))
 
 /* Forward declarations for the following functions that are usually
    inlined.  In case inlining is disabled, or inlining is not
@@ -425,15 +425,14 @@ extern void _dino_deref (struct ext2_inode *inode);
 EXT2FS_EI struct ext2_inode *
 dino_ref (ino_t inum)
 {
-  unsigned long inodes_per_group = sblock->s_inodes_per_group;
+  unsigned long inodes_per_group = le32toh (sblock->s_inodes_per_group);
   unsigned long bg_num = (inum - 1) / inodes_per_group;
   unsigned long group_inum = (inum - 1) % inodes_per_group;
   struct ext2_group_desc *bg = group_desc (bg_num);
-  block_t block = bg->bg_inode_table + (group_inum / inodes_per_block);
-  struct ext2_inode *inode = disk_cache_block_ref (block);
-  inode += group_inum % inodes_per_block;
-  ext2_debug ("(%llu) = %p", inum, inode);
-  return inode;
+  block_t block = le32toh (bg->bg_inode_table) + (group_inum / inodes_per_block);
+  void *block_ptr = disk_cache_block_ref (block);
+  size_t offset = (group_inum % inodes_per_block) * global_inode_size;
+  return (struct ext2_inode *)((char *)block_ptr + offset);
 }
 
 EXT2FS_EI void
@@ -450,7 +449,7 @@ _dino_deref (struct ext2_inode *inode)
 /* inode.c */
 
 /* Write all active disknodes into the inode pager. */
-void write_all_disknodes ();
+void write_all_disknodes (void);
 
 /* ---------------------------------------------------------------- */
 
@@ -505,7 +504,9 @@ record_global_poke (void *ptr)
   block_t block = boffs_block (bptr_offs (ptr));
   void *block_ptr = bptr (block);
   ext2_debug ("(%p = %p)", ptr, block_ptr);
+#ifdef EXT2FS_DEBUG
   assert_backtrace (disk_cache_block_is_ref (block));
+#endif
   global_block_modified (block);
   pokel_add (&global_pokel, block_ptr, block_size);
 }
@@ -531,7 +532,9 @@ record_indir_poke (struct node *node, void *ptr)
   block_t block = boffs_block (bptr_offs (ptr));
   void *block_ptr = bptr (block);
   ext2_debug ("(%llu, %p)", node->cache_id, ptr);
+#ifdef EXT2FS_DEBUG
   assert_backtrace (disk_cache_block_is_ref (block));
+#endif
   global_block_modified (block);
   pokel_add (&diskfs_node_disknode (node)->indir_pokel, block_ptr, block_size);
 }

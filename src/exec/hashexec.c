@@ -36,14 +36,14 @@ check_hashbang (struct execdata *e,
 		file_t file,
 		task_t oldtask,
 		int flags,
-		char *file_name_exec,
-		char *argv, u_int argvlen, boolean_t argv_copy,
-		char *envp, u_int envplen, boolean_t envp_copy,
-		mach_port_t *dtable, u_int dtablesize, boolean_t dtable_copy,
-		mach_port_t *portarray, u_int nports, boolean_t portarray_copy,
-		int *intarray, u_int nints, boolean_t intarray_copy,
-		mach_port_t *deallocnames, u_int ndeallocnames,
-		mach_port_t *destroynames, u_int ndestroynames)
+		const char *file_name_exec,
+		char *argv, mach_msg_type_number_t argvlen, boolean_t argv_copy,
+		char *envp, mach_msg_type_number_t envplen, boolean_t envp_copy,
+		mach_port_t *dtable, mach_msg_type_number_t dtablesize, boolean_t dtable_copy,
+		mach_port_t *portarray, mach_msg_type_number_t nports, boolean_t portarray_copy,
+		int *intarray, mach_msg_type_number_t nints, boolean_t intarray_copy,
+		const mach_port_t *deallocnames, mach_msg_type_number_t ndeallocnames,
+		const mach_port_t *destroynames, mach_msg_type_number_t ndestroynames)
 {
   char *p;
   char *interp, *arg;		/* Interpreter file name, and first argument */
@@ -52,7 +52,12 @@ check_hashbang (struct execdata *e,
   char *new_argv;
   size_t new_argvlen;
   mach_port_t *new_dtable = NULL;
-  u_int new_dtablesize;
+  mach_msg_type_number_t new_dtablesize;
+  sigset_t arg_env_sigset;
+
+  sigemptyset (&arg_env_sigset);
+  sigaddset (&arg_env_sigset, SIGSEGV);
+  sigaddset (&arg_env_sigset, SIGBUS);
 
   file_t user_fd (int fd)
     {
@@ -216,14 +221,14 @@ check_hashbang (struct execdata *e,
 
   if (! e->error)
     {
-      int free_file_name = 0; /* True if we should free FILE_NAME.  */
+      char * volatile file_name_to_free = NULL; /* Will free this if set.  */
       jmp_buf args_faulted;
       void fault_handler (int signo)
 	{ longjmp (args_faulted, 1); }
       error_t setup_args (struct hurd_signal_preemptor *preemptor)
 	{
 	  size_t namelen;
-	  char * volatile file_name = NULL;
+	  const char * volatile file_name = NULL;
 
 	  if (setjmp (args_faulted))
 	    file_name = NULL;
@@ -237,44 +242,42 @@ check_hashbang (struct execdata *e,
 		 named by ARGV[0] in the `PATH' environment variable
 		 might find it.  */
 
-	      error_t error;
-	      char *name;
-	      int free_name = 0; /* True if we should free NAME. */
-	      file_t name_file;
-	      mach_port_t fileid, filefsid;
-	      ino_t fileno;
-
-	      /* Search $PATH for NAME, opening a port NAME_FILE on it.
-		 This is encapsulated in a function so we can catch faults
-		 reading the user's environment.  */
-	      error_t search_path (struct hurd_signal_preemptor *preemptor)
-		{
-		  error_t err;
-		  char *path = envz_get (envp, envplen, "PATH"), *pfxed_name;
-
-		  if (! path)
-		    {
-		      const size_t len = confstr (_CS_PATH, NULL, 0);
-		      path = alloca (len);
-		      confstr (_CS_PATH, path, len);
-		    }
-
-		  err = hurd_file_name_path_lookup (user_port, user_fd, 0,
-						    name, path, O_EXEC, 0,
-						    &name_file, &pfxed_name);
-		  if (!err && pfxed_name)
-		    {
-		      name = pfxed_name;
-		      free_name = 1;
-		    }
-
-		  return err;
-		}
-
 	      if (file_name_exec && file_name_exec[0] != '\0')
-		name = file_name_exec;
+		file_name = file_name_exec;
 	      else
 		{
+		  error_t error;
+		  file_t name_file;
+		  mach_port_t fileid, filefsid;
+		  ino_t fileno;
+		  char *name;
+		  /* Search $PATH for NAME, opening a port NAME_FILE on it.
+		     This is encapsulated in a function so we can catch faults
+		     reading the user's environment.  */
+		  error_t search_path (struct hurd_signal_preemptor *preemptor)
+		    {
+		      error_t err;
+		      char *path = envz_get (envp, envplen, "PATH"), *pfxed_name;
+
+		      if (! path)
+			{
+			  const size_t len = confstr (_CS_PATH, NULL, 0);
+			  path = alloca (len);
+			  confstr (_CS_PATH, path, len);
+			}
+
+		      err = hurd_file_name_path_lookup (user_port, user_fd, 0,
+							name, path, O_EXEC, 0,
+							&name_file, &pfxed_name);
+		      if (!err && pfxed_name)
+			{
+			  name = pfxed_name;
+			  file_name_to_free = pfxed_name;
+			}
+
+		      return err;
+		    }
+
 		  /* Try to locate the file.  */
 		  error = io_identity (file, &fileid, &filefsid, &fileno);
 		  if (error)
@@ -293,7 +296,7 @@ check_hashbang (struct execdata *e,
 		  if (strchr (name, '/') != NULL)
 		    error = lookup (name, 0, &name_file);
 		  else if ((error = hurd_catch_signal
-			    (sigmask (SIGBUS) | sigmask (SIGSEGV),
+			    (arg_env_sigset,
 			     (vm_address_t) envp, (vm_address_t) envp + envplen,
 			     &search_path, SIG_ERR)))
 		    name_file = MACH_PORT_NULL;
@@ -315,15 +318,10 @@ check_hashbang (struct execdata *e,
 		    }
 
 		  mach_port_deallocate (mach_task_self (), fileid);
-		}
 
-	      if (!error)
-		{
-		  file_name = name;
-		  free_file_name = free_name;
+		  if (!error)
+		    file_name = name;
 		}
-	      else if (free_name)
-		free (name);
 	    }
 
 	  if (file_name == NULL)
@@ -349,8 +347,9 @@ check_hashbang (struct execdata *e,
 	      mach_port_mod_refs (mach_task_self (), file,
 				  MACH_PORT_RIGHT_SEND, +1);
 
-	      file_name = alloca (100);
-	      sprintf (file_name, "/dev/fd/%d", fd);
+	      char *fd_file_name = alloca (100);
+	      sprintf (fd_file_name, "/dev/fd/%d", fd);
+	      file_name = fd_file_name;
 	    }
 
 	  /* Prepare the arguments to pass to the interpreter from the original
@@ -369,7 +368,7 @@ check_hashbang (struct execdata *e,
 	  if (new_argv == (caddr_t) -1)
 	    {
 	      e->error = errno;
-	      return e->error;
+	      goto end_setup_args;
 	    }
 	  else
 	    e->error = 0;
@@ -409,14 +408,15 @@ check_hashbang (struct execdata *e,
 	      memcpy (memcpy (n, arg, arg_len) + arg_len, file_name, namelen);
 	    }
 
-	  if (free_file_name)
-	    free (file_name);
+end_setup_args:
+	  if (file_name_to_free)
+	    free (file_name_to_free);
 
-	  return 0;
+	  return e->error;
 	}
 
       /* Set up the arguments.  */
-      hurd_catch_signal (sigmask (SIGSEGV) | sigmask (SIGBUS),
+      hurd_catch_signal (arg_env_sigset,
 			 (vm_address_t) argv, (vm_address_t) argv + argvlen,
 			 &setup_args, &fault_handler);
     }
@@ -466,7 +466,7 @@ check_hashbang (struct execdata *e,
       /* The exec of the interpreter succeeded!  Deallocate the resources
 	 we passed to that exec.  We don't need to save them in a bootinfo
 	 structure; the exec of the interpreter takes care of that.  */
-      u_int i;
+      unsigned i;
       mach_port_deallocate (mach_task_self (), file);
       task_resume (oldtask);	/* Our caller suspended it.  */
       mach_port_deallocate (mach_task_self (), oldtask);

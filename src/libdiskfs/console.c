@@ -24,6 +24,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <error.h>
+#include <signal.h>
 #include <assert-backtrace.h>
 
 #include <mach/mach.h>
@@ -34,7 +36,7 @@
 
 /* Make sure errors go somewhere reasonable.  */
 void
-diskfs_console_stdio ()
+diskfs_console_stdio (void)
 {
   if (getpid () > 0)
     {
@@ -45,12 +47,19 @@ diskfs_console_stdio ()
       else
 	{
 	  int fd = open ("/dev/console", O_RDWR);
-
-	  dup2 (fd, 0);
-	  dup2 (fd, 1);
-	  dup2 (fd, 2);
-	  if (fd > 2)
-	    close (fd);
+	  if (fd < 0)
+	    {
+	      mach_print ("Failed to open /dev/console\n");
+	      error (0, errno, "Failed to open /dev/console");
+	    }
+	  else
+	    {
+	      dup2 (fd, 0);
+	      dup2 (fd, 1);
+	      dup2 (fd, 2);
+	      if (fd > 2)
+		close (fd);
+	    }
 	}
     }
   else
@@ -67,5 +76,10 @@ diskfs_console_stdio ()
       stdin = mach_open_devstream (cons, "r");
       stdout = stderr = mach_open_devstream (cons, "w");
       mach_port_deallocate (mach_task_self (), cons);
+      setlinebuf (stderr);
     }
+
+  /* And make sure we don't die just because we got some error there.  */
+  signal (SIGPIPE, SIG_IGN);
+  signal (SIGLOST, SIG_IGN);
 }

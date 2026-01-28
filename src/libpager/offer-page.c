@@ -31,21 +31,15 @@ pager_offer_page (struct pager *p,
   pthread_mutex_lock (&p->interlock);
 
   if (_pager_pagemap_resize (p, offset + vm_page_size))
-    {
-      short *pm_entry = &p->pagemap[offset / vm_page_size];
+    goto release_out;
 
-      while (*pm_entry & PM_INCORE)
-	{
-	  pthread_mutex_unlock (&p->interlock);
-	  pager_flush_some (p, offset, vm_page_size, 1);
-	  pthread_mutex_lock (&p->interlock);
-	}
-      *pm_entry |= PM_INCORE;
+  short *pm_entry = &p->pagemap[offset / vm_page_size];
+  *pm_entry |= PM_INCORE;
 
-      memory_object_data_supply (p->memobjcntl, offset, buf, vm_page_size, 0,
-				 writelock ? VM_PROT_WRITE : VM_PROT_NONE, 
-				 precious, MACH_PORT_NULL);
-    }
+  memory_object_data_supply (p->memobjcntl, offset, buf, vm_page_size, 0,
+                             writelock ? VM_PROT_WRITE : VM_PROT_NONE,
+                             precious, MACH_PORT_NULL);
 
+ release_out:
   pthread_mutex_unlock (&p->interlock);
 }

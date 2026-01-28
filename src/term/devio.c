@@ -98,7 +98,7 @@ static int output_stopped;
 static int char_size_mask_xxx = 0xff;
 
 /* Forward */
-static error_t devio_desert_dtr ();
+static error_t devio_desert_dtr (void);
 
 static error_t
 devio_init (void)
@@ -141,7 +141,7 @@ devio_fini (void)
 /* XXX Convert a real speed to a bogus Mach speed.  Return
    -1 if the real speed was bogus, else 0. */
 static int
-real_speed_to_bogus_speed (int rspeed, int *bspeed)
+real_speed_to_bogus_speed (speed_t rspeed, int *bspeed)
 {
   switch (rspeed)
     {
@@ -210,7 +210,7 @@ real_speed_to_bogus_speed (int rspeed, int *bspeed)
 }
 
 /* XXX Convert a bogus speed to a real speed.  */
-static int
+static speed_t
 bogus_speed_to_real_speed (int bspeed)
 {
   switch (bspeed)
@@ -262,7 +262,7 @@ bogus_speed_to_real_speed (int bspeed)
 /* If there are characters on the output queue and no
    pending output requests, then send them. */
 static error_t
-devio_start_output ()
+devio_start_output (void)
 {
   char *cp;
   int size;
@@ -348,7 +348,7 @@ error_t
 device_read_reply_inband (mach_port_t replypt,
 			  error_t error_code,
 			  char *data,
-			  u_int datalen)
+			  mach_msg_type_number_t datalen)
 {
   int i, flush;
   error_t err;
@@ -395,21 +395,21 @@ device_read_reply_inband (mach_port_t replypt,
 }
 
 static error_t
-devio_set_break ()
+devio_set_break (void)
 {
   device_set_status (phys_device, TTY_SET_BREAK, 0, 0);
   return 0;
 }
 
 static error_t
-devio_clear_break ()
+devio_clear_break (void)
 {
   device_set_status (phys_device, TTY_CLEAR_BREAK, 0, 0);
   return 0;
 }
 
 static error_t
-devio_abandon_physical_output ()
+devio_abandon_physical_output (void)
 {
   int val = D_WRITE;
 
@@ -429,7 +429,7 @@ devio_abandon_physical_output ()
 }
 
 static error_t
-devio_suspend_physical_output ()
+devio_suspend_physical_output (void)
 {
   if (!output_stopped)
     {
@@ -440,13 +440,13 @@ devio_suspend_physical_output ()
 }
 
 static error_t
-devio_notice_input_flushed ()
+devio_notice_input_flushed (void)
 {
   return 0;
 }
 
 static int
-devio_pending_output_size ()
+devio_pending_output_size (void)
 {
   /* Unfortunately, there's no way to get the amount back from Mach
      that has actually been written from this... */
@@ -455,7 +455,7 @@ devio_pending_output_size ()
 
 /* Do this the first time the device is to be opened */
 static error_t
-initial_open ()
+initial_open (void)
 {
   error_t err;
 
@@ -492,7 +492,7 @@ initial_open ()
 }
 
 static error_t
-devio_desert_dtr ()
+devio_desert_dtr (void)
 {
   int bits;
 
@@ -506,7 +506,7 @@ devio_desert_dtr ()
 }
 
 static error_t
-devio_assert_dtr ()
+devio_assert_dtr (void)
 {
   error_t err;
 
@@ -536,7 +536,7 @@ device_open_reply (mach_port_t replyport,
 		   mach_port_t device)
 {
   struct tty_status ttystat;
-  size_t count = TTY_STATUS_COUNT;
+  mach_msg_type_number_t count = TTY_STATUS_COUNT;
   error_t err = 0;
 
   if (replyport != phys_reply)
@@ -618,7 +618,7 @@ devio_set_bits (struct termios *state)
   if (!(state->c_cflag & CIGNORE) && phys_device != MACH_PORT_NULL)
     {
       struct tty_status ttystat;
-      size_t cnt = TTY_STATUS_COUNT;
+      mach_msg_type_number_t cnt = TTY_STATUS_COUNT;
 
       /* Find the current state. */
       device_get_status (phys_device, TTY_STATUS, (dev_status_t) &ttystat, &cnt);
@@ -675,7 +675,7 @@ static error_t
 devio_mdmctl (int how, int bits)
 {
   int oldbits, newbits;
-  size_t cnt;
+  mach_msg_type_number_t cnt;
   if ((how == MDMCTL_BIS) || (how == MDMCTL_BIC))
     {
       cnt = TTY_MODEM_COUNT;
@@ -702,7 +702,7 @@ static error_t
 devio_mdmstate (int *state)
 {
   int bits;
-  size_t cnt = TTY_MODEM_COUNT;
+  mach_msg_type_number_t cnt = TTY_MODEM_COUNT;
   device_get_status (phys_device, TTY_MODEM, (dev_status_t) &bits, &cnt);
   if (cnt == TTY_MODEM_COUNT)
     *state = bits;
@@ -730,7 +730,7 @@ device_write_reply (mach_port_t replyport,
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 ports_do_mach_notify_send_once (struct port_info *pi)
 {
   error_t err;
@@ -747,7 +747,7 @@ ports_do_mach_notify_send_once (struct port_info *pi)
       if (input_pending)
 	{
 	  /* xxx */
-	  char msg[] = "Term input check happened\r\n";
+	  io_buf_ptr_inband_t msg = "Term input check happened\r\n";
 	  int foo;
 	  device_write_inband (phys_device, 0, 0, msg, sizeof msg, &foo);
 	  /* end xxx */

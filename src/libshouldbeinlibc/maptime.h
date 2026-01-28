@@ -48,6 +48,22 @@ extern void maptime_read (volatile struct mapped_time_value *mtime, struct timev
 MAPTIME_EI void
 maptime_read (volatile struct mapped_time_value *mtime, struct timeval *tv)
 {
+#ifdef HAVE_STRUCT_MAPPED_TIME_VALUE_TIME_VALUE_SECONDS
+  /* Use the 64bit time if it is supported in the kernel.  Otherwise step
+     back to the 32bit time.  */
+  if (mtime->time_value.seconds != 0)
+    {
+      do
+	{
+	  tv->tv_sec = mtime->time_value.seconds;
+	  __sync_synchronize ();
+	  tv->tv_usec = mtime->time_value.nanoseconds / 1000;
+	  __sync_synchronize ();
+	}
+      while (tv->tv_sec != mtime->check_seconds64);
+      return;
+    }
+#endif
   do
     {
       tv->tv_sec = mtime->seconds;

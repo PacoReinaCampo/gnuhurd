@@ -21,6 +21,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#include <mach/mach4.h>
 #include <hurd/hurd_types.h>
 #include <hurd/store.h>
 #include "default_pager_U.h"
@@ -73,8 +74,8 @@ diskfs_free_node (struct node *np, mode_t mode)
     {
     case DT_REG:
       if (np->dn->u.reg.memobj != MACH_PORT_NULL) {
-	/* XXX GNU Mach will terminate the object, and thus existing mappings
-	 * will get SIGBUS.  */
+      /* XXX GNU Mach will terminate the object, and thus existing mappings
+       * will get SIGBUS.  */
 	vm_deallocate (mach_task_self (), np->dn->u.reg.memref, 4096);
 	mach_port_deallocate (mach_task_self (), np->dn->u.reg.memobj);
       }	
@@ -339,7 +340,7 @@ diskfs_new_hardrefs (struct node *np)
 
 
 error_t
-diskfs_get_translator (struct node *np, char **namep, u_int *namelen)
+diskfs_get_translator (struct node *np, char **namep, mach_msg_type_number_t *namelen)
 {
   *namelen = np->dn->translen;
   if (*namelen == 0)
@@ -353,7 +354,7 @@ diskfs_get_translator (struct node *np, char **namep, u_int *namelen)
 
 error_t
 diskfs_set_translator (struct node *np,
-		       const char *name, u_int namelen,
+		       const char *name, mach_msg_type_number_t namelen,
 		       struct protid *cred)
 {
   char *new;
@@ -520,6 +521,7 @@ mach_port_t
 diskfs_get_filemap (struct node *np, vm_prot_t prot)
 {
   error_t err;
+  mach_port_t right;
 
   if (np->dn->type != DT_REG)
     {
@@ -561,14 +563,32 @@ diskfs_get_filemap (struct node *np, vm_prot_t prot)
       assert_perror_backtrace (err);
     }
 
-  /* XXX always writable */
+  if (prot & VM_PROT_WRITE)
+    right = np->dn->u.reg.memobj;
+  else
+    {
+      vm_offset_t offset = 0;
+      vm_offset_t start = 0;
+      vm_size_t len = ~0;
+      err = memory_object_create_proxy (mach_task_self (),
+                                        VM_PROT_READ | VM_PROT_EXECUTE,
+                                        &np->dn->u.reg.memobj,
+                                        MACH_MSG_TYPE_COPY_SEND, 1,
+                                        &offset, 1, &start, 1, &len, 1,
+                                        &right);
+      if (err)
+        {
+          errno = err;
+          return MACH_PORT_NULL;
+        }
+    }
 
   /* Add a reference for each call, the caller will deallocate it.  */
   err = mach_port_mod_refs (mach_task_self (), np->dn->u.reg.memobj,
 			    MACH_PORT_RIGHT_SEND, +1);
   assert_perror_backtrace (err);
 
-  return np->dn->u.reg.memobj;
+  return right;
 }
 
 /* The user must define this function.  Return a `struct pager *' suitable
@@ -584,24 +604,24 @@ diskfs_get_filemap_pager_struct (struct node *np)
 /* We have no pager of our own, so there is no need to worry about
    users of it, or to shut it down.  */
 int
-diskfs_pager_users ()
+diskfs_pager_users (void)
 {
   return 0;
 }
 void
-diskfs_shutdown_pager ()
+diskfs_shutdown_pager (void)
 {
 }
 
 /* The purpose of this is to decide that it's ok to make the fs read-only.
    Turning a temporary filesystem read-only seem pretty useless.  */
 vm_prot_t
-diskfs_max_user_pager_prot ()
+diskfs_max_user_pager_prot (void)
 {
   return VM_PROT_READ;		/* Probable lie that lets us go read-only.  */
 }
 
-error_t
+kern_return_t
 diskfs_S_file_get_storage_info (struct protid *cred,
 				mach_port_t **ports,
 				mach_msg_type_name_t *ports_type,

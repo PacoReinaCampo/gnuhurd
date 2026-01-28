@@ -69,7 +69,7 @@ error_t
 diskfs_lookup_hard (struct node *dp, const char *name, enum lookup_type type,
 		    struct node **npp, struct dirstat *ds, struct protid *cred)
 {
-  error_t err = 0;
+  error_t err = ENOENT;
   struct lookup_context ctx;
   int namelen;
   int spec_dotdot;
@@ -225,7 +225,7 @@ diskfs_get_directs (struct node *dp,
 		    int entry,
 		    int nentries,
 		    char **data,
-		    size_t *datacnt,
+		    mach_msg_type_number_t *datacnt,
 		    vm_size_t bufsiz,
 		    int *amt)
 {

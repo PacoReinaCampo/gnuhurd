@@ -28,17 +28,18 @@
 
 extern error_t
 exec_reauth (auth_t auth, int secure, int must_reauth,
-	     mach_port_t *ports, unsigned num_ports,
-	     mach_port_t *fds, unsigned num_fds);
+	     mach_port_t *ports, mach_msg_type_number_t num_ports,
+	     mach_port_t *fds, mach_msg_type_number_t num_fds);
 
 /* If SUID or SGID is true, adds UID and/or GID respectively to the
    authentication in PORTS[INIT_PORT_AUTH], and replaces it with the result.
-   All the other ports in PORTS and FDS are then reauthenticated, using any
-   privileges available through AUTH.  If GET_FILE_IDS is non-NULL, and the
-   auth port in PORTS[INIT_PORT_AUTH] is bogus, it is called to get a list of
-   uids and gids from the file to use as a replacement.  If SECURE is
-   non-NULL, whether not the added ids are new is returned in it.  If either
-   the uid or gid case fails, then the other may still be applied.  */
+   All the other ports in PORTS and FDS (except for PORTS[INIT_PORT_EXEC], if
+   SECURE ends up being true) are then reauthenticated, using any privileges
+   available through AUTH.  If GET_FILE_IDS is non-NULL, and the auth port in
+   PORTS[INIT_PORT_AUTH] is bogus, it is called to get a list of uids and gids
+   from the file to use as a replacement.  If SECURE is non-NULL, whether not
+   the added ids are new is returned in it.  If either the uid or gid case
+   fails, then the other may still be applied.  */
 error_t
 fshelp_exec_reauth (int suid, uid_t uid, int sgid, gid_t gid,
 		    auth_t auth,
@@ -130,9 +131,12 @@ fshelp_exec_reauth (int suid, uid_t uid, int sgid, gid_t gid,
       /* Re-authenticate the exec parameters.  */
       exec_reauth (newauth, _secure, 0, ports, num_ports, fds, num_fds);
 
-      proc_setowner (ports[INIT_PORT_PROC],
-		     eff_uids->num > 0 ? eff_uids->ids[0] : 0,
-		     !eff_uids->num);
+      /* Try proc_setowner () for compatibility with older proc server.  */
+      err = proc_setowner (ports[INIT_PORT_PROC],
+                           eff_uids->num > 0 ? eff_uids->ids[0] : 0,
+                           !eff_uids->num);
+      if (err == EOPNOTSUPP)
+        err = 0;
 
     abandon_suid:
       if (eff_uids)

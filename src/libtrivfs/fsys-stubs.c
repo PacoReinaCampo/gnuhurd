@@ -59,12 +59,12 @@ kern_return_t __attribute__((weak))
 trivfs_S_fsys_getfile (struct trivfs_control *cntl,
 		       mach_port_t reply,
 		       mach_msg_type_name_t replytype,
-		       uid_t *genuids,
-		       size_t ngenuids,
-		       uid_t *gengids,
-		       size_t ngengids,
-		       data_t handle,
-		       size_t handlesize,
+		       const uid_t *genuids,
+		       mach_msg_type_number_t ngenuids,
+		       const uid_t *gengids,
+		       mach_msg_type_number_t ngengids,
+		       const_data_t handle,
+		       mach_msg_type_number_t handlesize,
 		       mach_port_t *file,
 		       mach_msg_type_name_t *filetype)
 {

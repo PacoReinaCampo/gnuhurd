@@ -30,6 +30,7 @@
 #include <string.h>
 #include <error.h>
 #include <fcntl.h>
+#include <unistd.h>
 
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -71,7 +72,7 @@ ethernet_set_multi (struct device *dev)
 {
 }
 
-static short ether_filter[] =
+static filter_t ether_filter[] =
 {
 #ifdef NETF_IN
   /* We have to tell the packet filtering code that we're interested in
@@ -93,7 +94,7 @@ static struct bpf_insn bpf_ether_filter[] =
     {BPF_RET|BPF_K, 0, 0, 1500},		/* And return 1500 bytes */
     {BPF_RET|BPF_K, 0, 0, 0},			/* Or discard it all */
 };
-static int bpf_ether_filter_len = sizeof (bpf_ether_filter) / sizeof (short);
+static int bpf_ether_filter_len = sizeof (bpf_ether_filter) / (sizeof (short));
 
 static struct port_bucket *etherport_bucket;
 
@@ -101,6 +102,8 @@ static struct port_bucket *etherport_bucket;
 static void *
 ethernet_thread (void *arg)
 {
+  pthread_setname_np (pthread_self (), "ethernet");
+
   ports_manage_port_operations_one_thread (etherport_bucket,
 					   ethernet_demuxer,
 					   0);
@@ -153,7 +156,8 @@ ethernet_demuxer (mach_msg_header_t *inp,
     + msg->packet_type.msgt_number - sizeof (struct packet_header);
 
   pthread_mutex_lock (&net_bh_lock);
-  skb = alloc_skb (datalen, GFP_ATOMIC);
+  skb = alloc_skb (NET_IP_ALIGN + datalen, GFP_ATOMIC);
+  skb_reserve(skb, NET_IP_ALIGN);
   skb_put (skb, datalen);
   skb->dev = dev;
 
@@ -219,7 +223,7 @@ ethernet_open (struct device *dev)
 
       err = device_set_filter (edev->ether_port, ports_get_right (edev->readpt),
 			       MACH_MSG_TYPE_MAKE_SEND, 0,
-			       bpf_ether_filter, bpf_ether_filter_len);
+			       (filter_array_t) bpf_ether_filter, bpf_ether_filter_len);
       if (err)
 	error (2, err, "device_set_filter on %s", dev->name);
     }
@@ -263,6 +267,8 @@ ethernet_close (struct device *dev)
   device_close (edev->ether_port);
   mach_port_deallocate (mach_task_self (), edev->ether_port);
   edev->ether_port = MACH_PORT_NULL;
+
+  return 0;
 }
 
 /* Transmit an ethernet frame */
@@ -271,21 +277,22 @@ ethernet_xmit (struct sk_buff *skb, struct device *dev)
 {
   error_t err;
   struct ether_device *edev = (struct ether_device *) dev->priv;
-  u_int count;
-  u_int tried = 0;
+  int count;
+  unsigned tried = 0;
 
   do
     {
       tried++;
-      err = device_write (edev->ether_port, D_NOWAIT, 0, skb->data, skb->len, &count);
+      err = device_write (edev->ether_port, D_NOWAIT, 0, (io_buf_ptr_t) skb->data, skb->len, &count);
       if (err == EMACH_SEND_INVALID_DEST || err == EMIG_SERVER_DIED)
 	{
-	  /* Device probably just died, try to reopen it.  */
+	  /* Device probably just died, wait a bit (to let driver restart) and try to reopen it.  */
 
 	  if (tried == 2)
 	    /* Too many tries, abort */
 	    break;
 
+	  sleep (1);
 	  ethernet_close (dev);
 	  ethernet_open (dev);
 	}
@@ -321,7 +328,7 @@ void
 setup_ethernet_device (char *name, struct device **device)
 {
   struct net_status netstat;
-  size_t count;
+  mach_msg_type_number_t count;
   int net_address[2];
   error_t err;
   struct ether_device *edev;

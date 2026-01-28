@@ -74,6 +74,13 @@ struct trivfs_control
   void *hook;			/* for user use */
 };
 
+/* The user may define this variable.  Set this to the name of the
+   filesystem server. */
+extern char *trivfs_server_name __attribute__((weak));
+
+/* The user may define this variables.  Set this to be the server
+   version number.  */
+extern char *trivfs_server_version __attribute__((weak));
 
 /* The user must define these variables. */
 extern int trivfs_fstype;
@@ -139,18 +146,20 @@ extern void (*trivfs_protid_destroy_hook) (struct trivfs_protid *);
    is about to be destroyed. */
 extern void (*trivfs_peropen_destroy_hook) (struct trivfs_peropen *);
 
+typedef error_t (*trivfs_getroot_hook_fun) (struct trivfs_control *cntl,
+				       mach_port_t reply_port,
+				       mach_msg_type_name_t reply_port_type,
+				       mach_port_t dotdot,
+				       const uid_t *uids, mach_msg_type_number_t nuids, const uid_t *gids, mach_msg_type_number_t ngids,
+				       int flags,
+				       retry_type *do_retry, char *retry_name,
+				       mach_port_t *node, mach_msg_type_name_t *node_type);
+
 /* If this variable is set, it is called by trivfs_S_fsys_getroot before any
    other processing takes place; if the return value is EAGAIN, normal trivfs
    getroot processing continues, otherwise the rpc returns with that return
    value.  */
-extern error_t (*trivfs_getroot_hook) (struct trivfs_control *cntl,
-				       mach_port_t reply_port,
-				       mach_msg_type_name_t reply_port_type,
-				       mach_port_t dotdot,
-				       uid_t *uids, u_int nuids, uid_t *gids, u_int ngids,
-				       int flags,
-				       retry_type *do_retry, char *retry_name,
-				       mach_port_t *node, mach_msg_type_name_t *node_type);
+extern trivfs_getroot_hook_fun trivfs_getroot_hook;
 
 /* Creates a control port for this filesystem and sends it to BOOTSTRAP with
    fsys_startup.  CONTROL_CLASS & CONTROL_BUCKET are passed to the ports
@@ -166,6 +175,17 @@ error_t trivfs_startup (mach_port_t bootstrap, int flags,
 			struct port_class *protid_class,
 			struct port_bucket *protid_bucket,
 			struct trivfs_control **control);
+
+/* Start in debug mode, no need to be called by settrans. Common options are
+   the same as in trivfs_startup. FILE_NAME is the path of the node where the
+   translator is set*/
+error_t
+trivfs_startup_debug(const char *file_name,
+                    struct port_class *control_class,
+                    struct port_bucket *control_bucket,
+                    struct port_class *protid_class,
+                    struct port_bucket *protid_bucket,
+                    struct trivfs_control **control);
 
 /* Create a new trivfs control port, with underlying node UNDERLYING, and
    return it in CONTROL.  CONTROL_CLASS & CONTROL_BUCKET are passed to
@@ -227,7 +247,7 @@ extern struct argp *trivfs_runtime_argp;
    for this routine simply uses TRIVFS_RUNTIME_ARGP (supply FSYS as the argp
    input field).  */
 error_t trivfs_set_options (struct trivfs_control *fsys,
-			    char *argz, size_t argz_len);
+			    const char *argz, size_t argz_len);
 
 /* Append to the malloced string *ARGZ of length *ARGZ_LEN a NUL-separated
    list of the arguments to this translator.  The default definition of this
@@ -280,7 +300,7 @@ typedef struct trivfs_control *trivfs_control_t;
 kern_return_t trivfs_S_io_write (trivfs_protid_t io_object,
 				 mach_port_t reply,
 				 mach_msg_type_name_t replyPoly,
-				 data_t data,
+				 const_data_t data,
 				 mach_msg_type_number_t dataCnt,
 				 loff_t offset,
 				 vm_size_t *amount);

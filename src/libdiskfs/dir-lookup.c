@@ -23,18 +23,19 @@
 #include <hurd/fshelp.h>
 #include <hurd/fsys.h>
 #include <hurd/paths.h>
+#include <assert-backtrace.h>
 
 #include "priv.h"
 #include "fs_S.h"
 
 /* Implement dir_lookup as described in <hurd/fs.defs>. */
-error_t
+kern_return_t
 diskfs_S_dir_lookup (struct protid *dircred,
-		     char *filename,
+		     const_string_t filename,
 		     int flags,
 		     mode_t mode,
 		     retry_type *do_retry,
-		     char *retry_name,
+		     string_t retry_name,
 		     mach_port_t *retry_port,
 		     mach_msg_type_name_t *retry_port_type)
 {
@@ -46,17 +47,17 @@ diskfs_S_dir_lookup (struct protid *dircred,
   int nextnamelen;
   error_t err = 0;
   char *pathbuf = 0;
-  int pathbuflen = 0;
   int newnamelen;
   int create, excl;
   int lastcomp = 0;
   int newnode = 0;
   struct dirstat *ds = 0;
   int mustbedir = 0;
-  size_t amt;
+  mach_msg_type_name_t amt;
   int type;
   struct protid *newpi = 0;
   struct peropen *newpo = 0;
+  int orig_flags = flags;
 
   if (!dircred)
     return EOPNOTSUPP;
@@ -77,7 +78,7 @@ diskfs_S_dir_lookup (struct protid *dircred,
 
   /* Keep a pointer to the start of the filename for length
      calculations.  */
-  char *filename_start = filename;
+  const char *filename_start = filename;
 
   *retry_port_type = MACH_MSG_TYPE_MAKE_SEND;
   *do_retry = FS_RETRY_NORMAL;
@@ -277,6 +278,7 @@ diskfs_S_dir_lookup (struct protid *dircred,
 		  char *end = strchr (retry_name, '\0');
 		  char *translator_path = strdupa (relpath);
 		  char *complete_path;
+                  struct port_info *notify_port;
 
 		  if (mustbedir)
 		    *end++ = '/'; /* Trailing slash.  */
@@ -308,10 +310,17 @@ diskfs_S_dir_lookup (struct protid *dircred,
 		    /* dircred is the root directory.  */
 		    complete_path = translator_path;
 		  else
-		    asprintf (&complete_path, "%s/%s", dircred->po->path,
-			      translator_path);
-
-		  err = fshelp_set_active_translator (&newpi->pi,
+		    {
+		      err = asprintf (&complete_path, "%s/%s", dircred->po->path,
+		                      translator_path);
+		      if (err == -1)
+			{
+			  err = errno;
+			  goto out;
+			}
+		    }
+                  notify_port = newpi->pi.bucket->notify_port;
+		  err = fshelp_set_active_translator (notify_port,
 						      complete_path,
 						      &np->transbox);
 		  if (complete_path != translator_path)
@@ -361,11 +370,8 @@ diskfs_S_dir_lookup (struct protid *dircred,
 
 	  nextnamelen = nextname ? strlen (nextname) + 1 : 0;
 	  newnamelen = nextnamelen + np->dn_stat.st_size + 1 + 1;
-	  if (pathbuflen < newnamelen)
-	    {
-	      pathbuf = alloca (newnamelen);
-	      pathbuflen = newnamelen;
-	    }
+
+	  pathbuf = alloca (newnamelen);
 
 	  if (diskfs_read_symlink_hook)
 	    err = (*diskfs_read_symlink_hook)(np, pathbuf);
@@ -449,7 +455,7 @@ diskfs_S_dir_lookup (struct protid *dircred,
  gotit:
   type = np->dn_stat.st_mode & S_IFMT;
 
-  if (mustbedir && type != S_IFDIR)
+  if ((mustbedir || orig_flags & O_DIRECTORY) && type != S_IFDIR)
     {
       err = ENOTDIR;
       goto out;
@@ -535,7 +541,10 @@ diskfs_S_dir_lookup (struct protid *dircred,
       else
 	{
 	  newpi->po->path = NULL;
-	  asprintf (&newpi->po->path, "%s/%s", dircred->po->path, relpath);
+	  int err2 = asprintf (&newpi->po->path, "%s/%s", dircred->po->path, relpath);
+	  /* If asprintf fails set path to NULL so that the if below checks errno. */
+	  if (err2 == -1)
+	    newpi->po->path = NULL;
 	}
 
       if (! newpi->po->path)

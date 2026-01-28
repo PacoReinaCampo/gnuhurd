@@ -22,9 +22,14 @@
 
 #include <linux/netdevice.h>
 #include <linux/notifier.h>
+#include <linux/inetdevice.h>
+#include <linux/ip.h>
+#include <linux/route.h>
+#include <linux/rtnetlink.h>
 
 #include "iioctl_S.h"
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <string.h>
 #include <unistd.h>
@@ -32,9 +37,14 @@
 #include <sys/mman.h>
 #include <hurd/fshelp.h>
 
+#include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
 #include <net/sock.h>
+#include <hurd/ioctl_types.h>
+#include <net/route.h>
+#include <net/ip_fib.h>
+#include <net/addrconf.h>
 
 extern struct notifier_block *netdev_chain;
 
@@ -47,7 +57,7 @@ extern void inquire_device (struct device *dev, uint32_t *addr,
 			    uint32_t *broadcast);
 
 /* Truncate name, take the global lock and find device with this name.  */
-struct device *get_dev (char *name)
+struct device *get_dev (const char *name)
 {
   char ifname[IFNAMSIZ];
   struct device *dev;
@@ -64,6 +74,199 @@ struct device *get_dev (char *name)
   return dev;
 }
 
+/* This code is cobbled together from what
+ * the SIOCADDRT ioctl code does, and from the apparent functionality
+ * of the "netlink" layer from perusing a little.
+ */
+
+struct rt_req
+{
+  struct nlmsghdr nlh;
+  struct rtmsg rtm;
+};
+
+static error_t
+prepare_rt_req(struct rt_req *req, struct device *dev, in_addr_t dst, in_addr_t mask, in_addr_t gw)
+{
+  if (bad_mask (mask, dst))
+    return EINVAL;
+
+  if (!dev->name)
+    return ENODEV;
+
+  memset (req, 0, sizeof *req);
+
+  req->nlh.nlmsg_pid = 0;
+  req->nlh.nlmsg_seq = 0;
+  req->nlh.nlmsg_len = NLMSG_LENGTH (sizeof req->rtm);
+
+  req->rtm.rtm_scope = RT_SCOPE_UNIVERSE;
+  req->rtm.rtm_type = RTN_UNICAST;
+  req->rtm.rtm_protocol = RTPROT_BOOT;
+  req->rtm.rtm_dst_len = inet_mask_len(mask);
+  req->rtm.rtm_table = RT_TABLE_MAIN;
+
+  return 0;
+}
+
+static error_t
+delete_gateway(struct device *dev, in_addr_t dst, in_addr_t mask, in_addr_t gw)
+{
+  error_t err;
+  struct kern_rta rta;
+  struct rt_req req;
+  struct fib_table *tb;
+
+  err = prepare_rt_req(&req, dev, dst, mask, gw);
+  if (err)
+    return err;
+
+  /* Delete any existing default route on configured device  */
+  req.nlh.nlmsg_type = RTM_DELROUTE;
+  req.nlh.nlmsg_flags = 0;
+  req.rtm.rtm_scope = RT_SCOPE_UNIVERSE;
+
+  memset (&rta, 0, sizeof rta);
+  rta.rta_oif = &dev->ifindex;
+  rta.rta_dst = &dst;
+  rta.rta_gw = &gw;
+  tb = fib_get_table (req.rtm.rtm_table);
+  if (tb)
+    {
+      err = - (*tb->tb_delete)
+        (tb, &req.rtm, &rta, &req.nlh, 0);
+      if (err && err != ESRCH)
+	return err;
+      err = 0;
+    }
+  return err;
+}
+
+static error_t
+add_gateway(struct device *dev, in_addr_t dst, in_addr_t mask, in_addr_t gw)
+{
+  error_t err;
+  struct kern_rta rta;
+  struct rt_req req;
+  struct fib_table *tb;
+
+  err = prepare_rt_req(&req, dev, dst, mask, gw);
+  if (err)
+    return err;
+
+  /* Add a gateway  */
+  req.nlh.nlmsg_type = RTM_NEWROUTE;
+  req.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE;
+  req.rtm.rtm_scope = RT_SCOPE_UNIVERSE;
+
+  memset (&rta, 0, sizeof rta);
+  rta.rta_oif = &dev->ifindex;
+  rta.rta_dst = &dst;
+  rta.rta_gw = &gw;
+  tb = fib_new_table (req.rtm.rtm_table);
+  err = (!tb ? ENOBUFS
+       : - (*tb->tb_insert) (tb, &req.rtm, &rta, &req.nlh, 0));
+  return err;
+}
+
+/* Setup a static route (required for e.g. DHCP) */
+static error_t
+add_static_route(struct device *dev, in_addr_t dst, in_addr_t mask)
+{
+  error_t err;
+  struct kern_rta rta;
+  struct rt_req req;
+  struct fib_table *tb;
+
+  /* Simulate the SIOCADDRT behavior.  */
+
+  err = prepare_rt_req(&req, dev, dst, mask, INADDR_ANY);
+  if (err)
+    return err;
+
+  /* Append this routing for addr.  By this way we can always send
+     dhcp messages (e.g dhcp renew). */
+  req.nlh.nlmsg_type = RTM_NEWROUTE;
+  req.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_APPEND;
+  req.rtm.rtm_scope = RT_SCOPE_LINK;
+
+  memset (&rta, 0, sizeof rta);
+  rta.rta_dst = &dst;
+  rta.rta_oif = &dev->ifindex;
+
+  tb = fib_new_table (req.rtm.rtm_table);
+  if (tb)
+    err = tb->tb_insert (tb, &req.rtm, &rta, &req.nlh, NULL);
+  else
+    err = ENOBUFS;
+  return err;
+}
+
+static error_t
+delete_static_route(struct device *dev, in_addr_t dst, in_addr_t mask)
+{
+  error_t err;
+  struct kern_rta rta;
+  struct rt_req req;
+  struct fib_table *tb;
+
+  err = prepare_rt_req(&req, dev, dst, mask, INADDR_ANY);
+  if (err)
+    return err;
+
+  /* Delete existing static route on configured device matching src/dst */
+  req.nlh.nlmsg_type = RTM_DELROUTE;
+  req.nlh.nlmsg_flags = 0;
+  req.rtm.rtm_scope = RT_SCOPE_LINK;
+
+  memset (&rta, 0, sizeof rta);
+  rta.rta_dst = &dst;
+  rta.rta_oif = &dev->ifindex;
+
+  tb = fib_get_table (req.rtm.rtm_table);
+  if (tb)
+    {
+      err = - (*tb->tb_delete)
+        (tb, &req.rtm, &rta, &req.nlh, 0);
+      if (err && err != ESRCH)
+	return err;
+      err = 0;
+    }
+  return err;
+}
+
+error_t
+add_route (struct device *dev, const struct srtentry *r)
+{
+  error_t err;
+
+  if (!r)
+    return EINVAL;
+
+  if (r->rt_flags & RTF_GATEWAY)
+    err = add_gateway(dev, r->rt_dest, r->rt_mask, r->rt_gateway);
+  else
+    err = add_static_route(dev, r->rt_dest, r->rt_mask);
+
+  return err;
+}
+
+error_t
+delete_route (struct device *dev, const struct srtentry *r)
+{
+  error_t err;
+
+  if (!r)
+    return EINVAL;
+
+  if (r->rt_flags & RTF_GATEWAY)
+    err = delete_gateway(dev, r->rt_dest, r->rt_mask, r->rt_gateway);
+  else
+    err = delete_static_route(dev, r->rt_dest, r->rt_mask);
+
+  return err;
+}
+
 enum siocgif_type
 {
   ADDR,
@@ -76,7 +279,7 @@ enum siocgif_type
   kern_return_t								\
   S_iioctl_siocgif##name (struct sock_user *user,                       \
 			  ifname_t ifnam,				\
-			  sockaddr_t *addr)				\
+			  sockaddr_t *addr)			\
   {									\
     return siocgifXaddr (user, ifnam, addr, type);			\
   }
@@ -116,7 +319,7 @@ siocgifXaddr (struct sock_user *user,
 #define SIOCSIF(name, type)						\
   kern_return_t								\
   S_iioctl_siocsif##name (struct sock_user *user,                       \
-			  ifname_t ifnam,				\
+			  const ifname_t ifnam,				\
 			  sockaddr_t addr)				\
   {									\
     return siocsifXaddr (user, ifnam, &addr, type);			\
@@ -125,7 +328,7 @@ siocgifXaddr (struct sock_user *user,
 /* Set some sockaddr type of info.  */
 static kern_return_t
 siocsifXaddr (struct sock_user *user,
-	      ifname_t ifnam,
+	      const ifname_t ifnam,
 	      sockaddr_t *addr,
 	      enum siocgif_type type)
 {
@@ -158,6 +361,56 @@ siocsifXaddr (struct sock_user *user,
   return err;
 }
 
+/* 10 SIOCADDRT -- Add a network route */
+kern_return_t
+S_rioctl_siocaddrt (struct sock_user *user,
+		    const ifname_t ifnam,
+		    const struct srtentry route)
+{
+  error_t err = 0;
+  struct device *dev;
+
+  if (!user)
+    return EOPNOTSUPP;
+
+  dev = get_dev (ifnam);
+
+  if (!dev)
+    err = ENODEV;
+  else if (user->sock->sk->family != AF_INET)
+    err = EINVAL;
+  else
+    err = add_route (dev, &route);
+
+  pthread_mutex_unlock (&global_lock);
+  return err;
+}
+
+/* 11 SIOCDELRT -- Delete a network route */
+kern_return_t
+S_rioctl_siocdelrt (struct sock_user *user,
+		    const ifname_t ifnam,
+		    const struct srtentry route)
+{
+  error_t err = 0;
+  struct device *dev;
+
+  if (!user)
+    return EOPNOTSUPP;
+
+  dev = get_dev (ifnam);
+
+  if (!dev)
+    err = ENODEV;
+  else if (user->sock->sk->family != AF_INET)
+    err = EINVAL;
+  else
+    err = delete_route (dev, &route);
+
+  pthread_mutex_unlock (&global_lock);
+  return err;
+}
+
 /* 12 SIOCSIFADDR -- Set address of a network interface.  */
 SIOCSIF (addr, ADDR);
 
@@ -167,7 +420,7 @@ SIOCSIF (dstaddr, DSTADDR);
 /* 16 SIOCSIFFLAGS -- Set flags of a network interface.  */
 kern_return_t
 S_iioctl_siocsifflags (struct sock_user *user,
-		       ifname_t ifnam,
+		       const ifname_t ifnam,
 		       short flags)
 {
   error_t err = 0;
@@ -192,7 +445,7 @@ S_iioctl_siocsifflags (struct sock_user *user,
 /* 17 SIOCGIFFLAGS -- Get flags of a network interface.  */
 kern_return_t
 S_iioctl_siocgifflags (struct sock_user *user,
-		       char *name,
+		       ifname_t name,
 		       short *flags)
 {
   error_t err = 0;
@@ -238,7 +491,7 @@ S_iioctl_siocgifmetric (struct sock_user *user,
 /* 24 SIOCSIFMETRIC -- Set metric of a network interface.  */
 kern_return_t
 S_iioctl_siocsifmetric (struct sock_user *user,
-			ifname_t ifnam,
+			const ifname_t ifnam,
 			int metric)
 {
   return EOPNOTSUPP;
@@ -247,7 +500,7 @@ S_iioctl_siocsifmetric (struct sock_user *user,
 /* 25 SIOCDIFADDR -- Delete interface address.  */
 kern_return_t
 S_iioctl_siocdifaddr (struct sock_user *user,
-		      ifname_t ifnam,
+		      const ifname_t ifnam,
 		      sockaddr_t addr)
 {
   return EOPNOTSUPP;
@@ -266,7 +519,7 @@ SIOCGIF (brdaddr, BRDADDR);
 SIOCGIF (netmask, NETMASK);
 
 /* 39 SIOCGIFHWADDR -- Get the hardware address of a network interface.  */
-error_t
+kern_return_t
 S_iioctl_siocgifhwaddr (struct sock_user *user,
 			ifname_t ifname,
 			sockaddr_t *addr)
@@ -283,6 +536,7 @@ S_iioctl_siocgifhwaddr (struct sock_user *user,
   else
     {
       memcpy (addr->sa_data, dev->dev_addr, dev->addr_len);
+      addr->sa_len = dev->addr_len;
       addr->sa_family = dev->type;
     }
   
@@ -291,7 +545,7 @@ S_iioctl_siocgifhwaddr (struct sock_user *user,
 }
 
 /* 51 SIOCGIFMTU -- Get mtu of a network interface.  */
-error_t
+kern_return_t
 S_iioctl_siocgifmtu (struct sock_user *user,
 		     ifname_t ifnam,
 		     int *mtu)
@@ -311,9 +565,9 @@ S_iioctl_siocgifmtu (struct sock_user *user,
 }
 
 /* 51 SIOCSIFMTU -- Set mtu of a network interface.  */
-error_t
+kern_return_t
 S_iioctl_siocsifmtu (struct sock_user *user,
-		     ifname_t ifnam,
+		     const ifname_t ifnam,
 		     int mtu)
 {
   error_t err = 0;
@@ -345,7 +599,7 @@ S_iioctl_siocsifmtu (struct sock_user *user,
 }
 
 /* 100 SIOCGIFINDEX -- Get index number of a network interface.  */
-error_t
+kern_return_t
 S_iioctl_siocgifindex (struct sock_user *user,
 		       ifname_t ifnam,
 		       int *index)
@@ -365,7 +619,7 @@ S_iioctl_siocgifindex (struct sock_user *user,
 }
 
 /* 101 SIOCGIFNAME -- Get name of a network interface from index number.  */
-error_t
+kern_return_t
 S_iioctl_siocgifname (struct sock_user *user,
 		      ifname_t ifnam,
 		      int *index)

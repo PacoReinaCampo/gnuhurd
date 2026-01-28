@@ -29,7 +29,7 @@
    or more links in the file system, therefore there is no guarantee
    that a translators name refers to an existing link in the file
    system.  */
-error_t
+kern_return_t
 diskfs_S_fsys_get_children (struct diskfs_control *fsys,
                             mach_port_t reply,
                             mach_msg_type_name_t replytype,
@@ -40,7 +40,7 @@ diskfs_S_fsys_get_children (struct diskfs_control *fsys,
 			    mach_msg_type_number_t *controlsCnt)
 {
   error_t err;
-  char *n = NULL;
+  char *n = NULL, *orig_names = *names;
   size_t n_len = 0;
   mach_port_t *c;
   size_t c_count;
@@ -54,15 +54,19 @@ diskfs_S_fsys_get_children (struct diskfs_control *fsys,
     goto errout;
 
   err = iohelp_return_malloced_buffer (n, n_len, names, names_len);
+  n = NULL; /* n was freed by iohelp_return_malloced_buffer. */
   if (err)
     goto errout;
-  n = NULL; /* n was freed by iohelp_return_malloced_buffer. */
 
   err = iohelp_return_malloced_buffer ((char *) c, c_count * sizeof *c,
                                        (char **) controls, controlsCnt);
-  if (err)
-    goto errout;
   c = NULL; /* c was freed by iohelp_return_malloced_buffer. */
+  if (err)
+    {
+      if (*names != orig_names)
+	munmap (*names, n_len);
+      goto errout;
+    }
 
   *controlsPoly = MACH_MSG_TYPE_MOVE_SEND;
   *controlsCnt = c_count;

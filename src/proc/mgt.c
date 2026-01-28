@@ -1,5 +1,5 @@
 /* Process management
-   Copyright (C) 1992,93,94,95,96,99,2000,01,02,13,14
+   Copyright (C) 1992,93,94,95,96,99,2000,01,02,13,14,21
      Free Software Foundation, Inc.
 
    This file is part of the GNU Hurd.
@@ -44,20 +44,25 @@
 #include "task_notify_S.h"
 #include <hurd/signal.h>
 
-/* Create a new id structure with the given genuine uids and gids. */
+extern mach_msg_return_t
+mach_msg_receive (mach_msg_header_t *msg);
+
+/* Create a new id structure with the given genuine uids. */
 static inline struct ids *
-make_ids (const uid_t *uids, size_t nuids)
+make_ids (const uid_t *eff_uids, size_t n_eff_uids,
+          const uid_t *avail_uids, size_t n_avail_uids)
 {
   struct ids *i;
 
-  i = malloc (sizeof (struct ids) + sizeof (uid_t) * nuids);;
+  i = malloc (sizeof (struct ids) + sizeof (uid_t) * (n_eff_uids + n_avail_uids));
   if (! i)
     return NULL;
 
-  i->i_nuids = nuids;
+  i->i_nuids = n_eff_uids + n_avail_uids;
   i->i_refcnt = 1;
 
-  memcpy (&i->i_uids, uids, sizeof (uid_t) * nuids);
+  memcpy (&i->i_uids[0], eff_uids, sizeof (uid_t) * n_eff_uids);
+  memcpy (&i->i_uids[n_eff_uids], avail_uids, sizeof (uid_t) * n_avail_uids);
   return i;
 }
 
@@ -92,9 +97,12 @@ kern_return_t
 S_proc_reauthenticate (struct proc *p, mach_port_t rendport)
 {
   error_t err;
+  mach_port_t new_proc_port, prev;
+  mach_msg_header_t msg;
+  struct ids *new_ids;
   uid_t gubuf[50], aubuf[50], ggbuf[50], agbuf[50];
   uid_t *gen_uids, *aux_uids, *gen_gids, *aux_gids;
-  size_t ngen_uids, naux_uids, ngen_gids, naux_gids;
+  mach_msg_type_number_t ngen_uids, naux_uids, ngen_gids, naux_gids;
 
   if (!p)
     return EOPNOTSUPP;
@@ -109,34 +117,78 @@ S_proc_reauthenticate (struct proc *p, mach_port_t rendport)
   ngen_gids = sizeof (ggbuf) / sizeof (uid_t);
   naux_gids = sizeof (agbuf) / sizeof (uid_t);
 
+  new_proc_port = mach_reply_port ();
+  /* Ask to be told if the new port dies.  We receive the notification
+     on the same port, and as it's not a proc_reauthenticate_complete ()
+     call, consider it an error.  */
+  err = mach_port_request_notification (mach_task_self (), new_proc_port,
+                                        MACH_NOTIFY_NO_SENDERS, 1,
+                                        new_proc_port,
+                                        MACH_MSG_TYPE_MAKE_SEND_ONCE,
+                                        &prev);
+  assert_perror_backtrace (err);
+  assert_backtrace (prev == MACH_PORT_NULL);
+
   /* Release the global lock while blocking on the auth server and client.  */
   pthread_mutex_unlock (&global_lock);
+
   do
     err = auth_server_authenticate (authserver,
-				    rendport, MACH_MSG_TYPE_COPY_SEND,
-				    MACH_PORT_NULL, MACH_MSG_TYPE_COPY_SEND,
-				    &gen_uids, &ngen_uids,
-				    &aux_uids, &naux_uids,
-				    &gen_gids, &ngen_gids,
-				    &aux_gids, &naux_gids);
+                                    rendport, MACH_MSG_TYPE_COPY_SEND,
+                                    new_proc_port, MACH_MSG_TYPE_MAKE_SEND,
+                                    &gen_uids, &ngen_uids,
+                                    &aux_uids, &naux_uids,
+                                    &gen_gids, &ngen_gids,
+                                    &aux_gids, &naux_gids);
   while (err == EINTR);
+
+  /* Wait for a proc_reauthenticate_complete () call
+     on the new port before proceeding.  */
+  if (!err)
+    {
+      msg.msgh_size = sizeof (mach_msg_header_t);
+      msg.msgh_local_port = new_proc_port;
+      err = mach_msg_receive (&msg);
+    }
+
   pthread_mutex_lock (&global_lock);
 
   if (err)
-    return err;
+    goto out;
+
+  /* Check if what we have received was indeed a
+     proc_reauthenticate_complete () call.  */
+  if (msg.msgh_id != 24064)
+    err = EINVAL;
+  mach_msg_destroy (&msg);
+  if (err)
+    goto out;
 
   if (p->p_dead)
-    /* The process died while we had the lock released.
-       Its p_id field is no longer valid and we shouldn't touch it.  */
-    err = EAGAIN;
-  else
     {
-      ids_rele (p->p_id);
-      p->p_id = make_ids (gen_uids, ngen_uids);
-      if (! p->p_id)
-	err = ENOMEM;
+      /* The process died while we had the lock released.
+         Its p_id field is no longer valid and we shouldn't touch it.  */
+      err = EAGAIN;
+      goto out;
     }
 
+  new_ids = make_ids (gen_uids, ngen_uids, aux_uids, naux_uids);
+  if (!new_ids)
+    {
+      err = errno;
+      goto out;
+    }
+
+  /* From here on, nothing can go wrong.  */
+
+  mach_port_deallocate (mach_task_self (), rendport);
+
+  ids_rele (p->p_id);
+  p->p_id = new_ids;
+
+  ports_reallocate_from_external (p, new_proc_port);
+
+ out:
   if (gen_uids != gubuf)
     munmap (gen_uids, ngen_uids * sizeof (uid_t));
   if (aux_uids != aubuf)
@@ -146,8 +198,9 @@ S_proc_reauthenticate (struct proc *p, mach_port_t rendport)
   if (aux_gids != agbuf)
     munmap (aux_gids, naux_gids * sizeof (uid_t));
 
-  if (!err)
-    mach_port_deallocate (mach_task_self (), rendport);
+  if (err)
+    mach_port_mod_refs (mach_task_self (), new_proc_port,
+                        MACH_PORT_RIGHT_RECEIVE, -1);
   return err;
 }
 
@@ -178,9 +231,6 @@ S_proc_child (struct proc *parentp,
     free (childp->p_login);
   childp->p_login = parentp->p_login;
   childp->p_login->l_refcnt++;
-
-  childp->p_owner = parentp->p_owner;
-  childp->p_noowner = parentp->p_noowner;
 
   ids_rele (childp->p_id);
   ids_ref (parentp->p_id);
@@ -258,7 +308,7 @@ S_proc_reassign (struct proc *p,
   remove_proc_from_hash (p);
 
   task_terminate (p->p_task);
-  mach_port_destroy (mach_task_self (), p->p_task);
+  mach_port_deallocate (mach_task_self (), p->p_task);
   p->p_task = stubp->p_task;
 
   /* For security, we need to use the request port from STUBP */
@@ -288,27 +338,182 @@ S_proc_reassign (struct proc *p,
   return 0;
 }
 
-/* Implement proc_setowner as described in <hurd/process.defs>. */
+/* Implement proc_reauthenticate_reassign
+   as described in <hurd/process.defs>.  */
 kern_return_t
-S_proc_setowner (struct proc *p,
-		 uid_t owner,
-		 int clear)
+S_proc_reauthenticate_reassign (struct proc *p,
+                                mach_port_t rendezvous,
+                                task_t new_task)
 {
+  error_t err;
+  mach_port_t new_proc_port, prev;
+  mach_msg_header_t msg;
+  struct proc *stubp;
+  struct ids *new_ids;
+  uid_t gubuf[50], aubuf[50], ggbuf[50], agbuf[50];
+  uid_t *gen_uids, *aux_uids, *gen_gids, *aux_gids;
+  mach_msg_type_number_t ngen_uids, naux_uids, ngen_gids, naux_gids;
+
   if (!p)
     return EOPNOTSUPP;
 
-  if (clear)
-    p->p_noowner = 1;
-  else
-    {
-      if (! check_uid (p, owner))
-	return EPERM;
+  if (!MACH_PORT_VALID (rendezvous))
+    return EINVAL;
 
-      p->p_owner = owner;
-      p->p_noowner = 0;
+  stubp = task_find (new_task);
+  if (!stubp)
+    return ESRCH;
+  if (stubp == p)
+    return EINVAL;
+  ports_port_ref (stubp);
+
+  gen_uids = gubuf;
+  aux_uids = aubuf;
+  gen_gids = ggbuf;
+  aux_gids = agbuf;
+
+  ngen_uids = sizeof (gubuf) / sizeof (uid_t);
+  naux_uids = sizeof (aubuf) / sizeof (uid_t);
+  ngen_gids = sizeof (ggbuf) / sizeof (uid_t);
+  naux_gids = sizeof (agbuf) / sizeof (uid_t);
+
+  new_proc_port = mach_reply_port ();
+  /* Ask to be told if the new port dies.  We receive the notification
+     on the same port, and as it's not a proc_reauthenticate_complete ()
+     call, consider it an error.  */
+  err = mach_port_request_notification (mach_task_self (), new_proc_port,
+                                        MACH_NOTIFY_NO_SENDERS, 1,
+                                        new_proc_port,
+                                        MACH_MSG_TYPE_MAKE_SEND_ONCE,
+                                        &prev);
+  assert_perror_backtrace (err);
+  assert_backtrace (prev == MACH_PORT_NULL);
+
+  /* Communicate with the auth server before doing
+     *any changes* to these two processes.  */
+
+  /* Release the lock while talking to the auth server.  */
+  pthread_mutex_unlock (&global_lock);
+
+  do
+    err = auth_server_authenticate (authserver,
+                                    rendezvous,
+                                    MACH_MSG_TYPE_COPY_SEND,
+                                    new_proc_port,
+                                    MACH_MSG_TYPE_MAKE_SEND,
+                                    &gen_uids, &ngen_uids,
+                                    &aux_uids, &naux_uids,
+                                    &gen_gids, &ngen_gids,
+                                    &aux_gids, &naux_gids);
+  while (err == EINTR);
+
+  /* Wait for a proc_reauthenticate_complete () call
+     on the new port before proceeding.  */
+  if (!err)
+    {
+      msg.msgh_size = sizeof (mach_msg_header_t);
+      msg.msgh_local_port = new_proc_port;
+      err = mach_msg_receive (&msg);
     }
 
-  return 0;
+  pthread_mutex_lock (&global_lock);
+
+  if (err)
+    goto out;
+
+  /* Check if what we have received was indeed a
+     proc_reauthenticate_complete () call.  */
+  if (msg.msgh_id != 24064)
+    err = EINVAL;
+  mach_msg_destroy (&msg);
+  if (err)
+    goto out;
+
+  /* If any task has died, or the process referring to the new task
+     has itself been reassigned in the meantime, abort.  */
+  if (p->p_dead || stubp->p_dead || stubp->p_task != new_task)
+    {
+      err = EAGAIN;
+      goto out;
+    }
+
+  /* Copy in the new ids.  */
+  new_ids = make_ids (gen_uids, ngen_uids, aux_uids, naux_uids);
+  if (!new_ids)
+    {
+      err = errno;
+      goto out;
+    }
+  ids_rele (p->p_id);
+  p->p_id = new_ids;
+
+  /* From here on, nothing can go wrong.  */
+
+  mach_port_deallocate (mach_task_self (), new_task);
+  mach_port_deallocate (mach_task_self (), rendezvous);
+
+  remove_proc_from_hash (p);
+
+  task_terminate (p->p_task);
+  mach_port_deallocate (mach_task_self (), p->p_task);
+
+  p->p_task = stubp->p_task;
+  stubp->p_task = MACH_PORT_NULL;
+  ports_destroy_right (stubp);
+  ports_reallocate_from_external (p, new_proc_port);
+
+  if (MACH_PORT_VALID (p->p_msgport))
+    {
+      mach_port_deallocate (mach_task_self (), p->p_msgport);
+      p->p_msgport = MACH_PORT_NULL;
+      p->p_deadmsg = 1;
+    }
+
+  /* These two are image dependent.  */
+  p->p_argv = stubp->p_argv;
+  p->p_envp = stubp->p_envp;
+
+  /* Destroy stubp.  */
+  process_has_exited (stubp);
+  stubp->p_waited = 1; /* fake out complete_exit */
+  complete_exit (stubp);
+
+  add_proc_to_hash (p);
+  err = 0;
+
+ out:
+  if (gen_uids != gubuf)
+    munmap (gen_uids, ngen_uids * sizeof (uid_t));
+  if (aux_uids != aubuf)
+    munmap (aux_uids, naux_uids * sizeof (uid_t));
+  if (gen_gids != ggbuf)
+    munmap (gen_gids, ngen_gids * sizeof (uid_t));
+  if (aux_gids != agbuf)
+    munmap (aux_gids, naux_gids * sizeof (uid_t));
+
+  if (err)
+    mach_port_mod_refs (mach_task_self (), new_proc_port,
+                        MACH_PORT_RIGHT_RECEIVE, -1);
+
+  ports_port_deref (stubp);
+
+  return err;
+}
+
+kern_return_t
+S_proc_setowner (struct proc *p,
+                 uid_t owner,
+                 int clear)
+{
+  /* No longer does anything, kept for compatibility.  */
+  return EOPNOTSUPP;
+}
+
+kern_return_t
+S_proc_reauthenticate_complete (struct proc *p)
+{
+  /* Regular calls of this routine always fail.  */
+  return EOPNOTSUPP;
 }
 
 /* Implement proc_getpids as described in <hurd/process.defs>. */
@@ -374,7 +579,7 @@ S_proc_dostop (struct proc *p,
 	       thread_t contthread)
 {
   thread_t threadbuf[2], *threads = threadbuf;
-  size_t nthreads = sizeof (threadbuf) / sizeof (thread_t);
+  mach_msg_type_number_t nthreads = sizeof (threadbuf) / sizeof (thread_t);
   int i;
   error_t err;
 
@@ -456,7 +661,7 @@ S_proc_exception_raise (struct exc *e,
 			mach_port_t task,
 			integer_t exception,
 			integer_t code,
-			integer_t subcode)
+			long_integer_t subcode)
 {
   error_t err;
   struct proc *p;
@@ -485,10 +690,10 @@ S_proc_exception_raise (struct exc *e,
 	 the faulting thread's state to run its recovery code, which should
 	 dequeue that message.  */
       err = thread_set_state (thread, e->flavor, e->thread_state, e->statecnt);
-      mach_port_deallocate (mach_task_self (), thread);
-      mach_port_deallocate (mach_task_self (), task);
       if (err)
 	return err;
+      mach_port_deallocate (mach_task_self (), thread);
+      mach_port_deallocate (mach_task_self (), task);
       return MIG_NO_REPLY;
 
     default:
@@ -562,7 +767,7 @@ store_pid (struct proc *p, void *loc)
 kern_return_t
 S_proc_getallpids (struct proc *p,
 		   pid_t **pids,
-		   size_t *pidslen)
+		   mach_msg_type_number_t *pidslen)
 {
   int nprocs;
   pid_t *loc;
@@ -640,8 +845,7 @@ create_init_proc (void)
 
   p->p_important = 1;
 
-  p->p_noowner = 0;
-  p->p_id = make_ids (&zero, 1);
+  p->p_id = make_ids (&zero, 1, &zero, 0);
   assert_backtrace (p->p_id);
 
   p->p_loginleader = 1;
@@ -662,17 +866,9 @@ void
 proc_death_notify (struct proc *p)
 {
   error_t err;
-  mach_port_t old;
 
-  err = mach_port_request_notification (mach_task_self (), p->p_task,
-					MACH_NOTIFY_DEAD_NAME, 1,
-					p->p_pi.port_right,
-					MACH_MSG_TYPE_MAKE_SEND_ONCE,
-					&old);
+  err = ports_request_dead_name_notification (p, p->p_task, NULL);
   assert_perror_backtrace (err);
-
-  if (old != MACH_PORT_NULL)
-    mach_port_deallocate (mach_task_self (), old);
 }
 
 /* Complete a new process that has been allocated but not entirely initialized.
@@ -700,7 +896,7 @@ complete_proc (struct proc *p, pid_t pid)
       /* Equip HURD_PID_STARTUP with the same credentials as
          HURD_PID_INIT.  */
       static const uid_t zero;
-      p->p_id = make_ids (&zero, 1);
+      p->p_id = make_ids (&zero, 1, &zero, 0);
       assert_backtrace (p->p_id);
     }
   else
@@ -724,19 +920,16 @@ complete_proc (struct proc *p, pid_t pid)
   p->p_ochild = 0;
   p->p_parentset = 0;
 
-  p->p_noowner = 1;
-
   p->p_pgrp = init_proc->p_pgrp;
 
   /* At this point, we do not know the task of the startup process,
      defer registering death notifications and adding it to the hash
      tables.  */
   if (pid != HURD_PID_STARTUP)
-    {
-      proc_death_notify (p);
-      add_proc_to_hash (p);
-    }
+    add_proc_to_hash (p);
   join_pgrp (p);
+  if (pid != HURD_PID_STARTUP)
+    proc_death_notify (p);
 }
 
 
@@ -909,6 +1102,8 @@ process_has_exited (struct proc *p)
 				1, tp->p_pgrp->pg_pgid,
 				!tp->p_pgrp->pg_orphcnt);
       tp->p_parent = reparent_to;
+      if (tp->p_dead)
+	isdead = 1;
 
       /* And now append the lists. */
       tp->p_sib = reparent_to->p_ochild;
@@ -934,18 +1129,9 @@ process_has_exited (struct proc *p)
   /* No one is going to wait for processes in a task namespace.  */
   if (MACH_PORT_VALID (p->p_task_namespace))
     {
-      mach_port_t task;
       mach_port_deallocate (mach_task_self (), p->p_task_namespace);
       p->p_waited = 1;
-
-      /* XXX: `complete_exit' will destroy p->p_task if it is valid.
-	 Prevent this so that `do_mach_notify_dead_name' can
-	 deallocate the right.	The proper fix is not to use
-	 mach_port_destroy in the first place.	*/
-      task = p->p_task;
-      p->p_task = MACH_PORT_NULL;
       complete_exit (p);
-      mach_port_deallocate (mach_task_self (), task);
     }
 }
 
@@ -957,7 +1143,10 @@ complete_exit (struct proc *p)
 
   remove_proc_from_hash (p);
   if (p->p_task != MACH_PORT_NULL)
-    mach_port_destroy (mach_task_self (), p->p_task);
+    {
+      mach_port_deallocate (mach_task_self (), p->p_task);
+      p->p_task = MACH_PORT_NULL;
+    }
 
   /* Remove us from our parent's list of children. */
   if (p->p_sib)
@@ -980,7 +1169,7 @@ struct proc *
 add_tasks (task_t task)
 {
   mach_port_t *psets;
-  size_t npsets;
+  mach_msg_type_number_t npsets;
   int i;
   struct proc *foundp = 0;
 
@@ -989,8 +1178,13 @@ add_tasks (task_t task)
     {
       mach_port_t psetpriv;
       mach_port_t *tasks;
-      size_t ntasks;
+      mach_msg_type_number_t ntasks;
       int j;
+
+      /* The kernel can deliver us an array with null slots in the
+	 middle, e.g. if a pset was dropped during the call.  */
+      if (! MACH_PORT_VALID (psets[i]))
+	continue;
 
       if (!foundp)
 	{
@@ -1011,7 +1205,8 @@ add_tasks (task_t task)
 		  if (!p)
 		    {
 		      p = new_proc (tasks[j]);
-		      set = 1;
+		      if (p)
+			set = 1;
 		    }
 		  if (!foundp && tasks[j] == task)
 		    foundp = p;
@@ -1031,7 +1226,7 @@ add_tasks (task_t task)
 /* Allocate a new unused PID.
    (Unused means it is neither the pid nor pgrp of any relevant data.) */
 int
-genpid ()
+genpid (void)
 {
 #define WRAP_AROUND 30000
 #define START_OVER 100
@@ -1068,7 +1263,7 @@ genpid ()
    us, communicating the names using command line options.  */
 
 /* Implement proc_set_init_task as described in <hurd/process.defs>.  */
-error_t
+kern_return_t
 S_proc_set_init_task(struct proc *callerp,
 		     task_t task)
 {
@@ -1094,8 +1289,8 @@ S_proc_set_init_task(struct proc *callerp,
     }
 
   init_proc->p_task = task;
-  proc_death_notify (init_proc);
   add_proc_to_hash (init_proc);
+  proc_death_notify (init_proc);
 
   return 0;
 }
@@ -1123,7 +1318,7 @@ S_proc_mark_important (struct proc *p)
 }
 
 /* Implement proc_is_important as described in <hurd/process.defs>.  */
-error_t
+kern_return_t
 S_proc_is_important (struct proc *callerp,
 		     boolean_t *essential)
 {
@@ -1136,7 +1331,7 @@ S_proc_is_important (struct proc *callerp,
 }
 
 /* Implement proc_set_code as described in <hurd/process.defs>.  */
-error_t
+kern_return_t
 S_proc_set_code (struct proc *callerp,
 		 vm_address_t start_code,
 		 vm_address_t end_code)
@@ -1151,7 +1346,7 @@ S_proc_set_code (struct proc *callerp,
 }
 
 /* Implement proc_get_code as described in <hurd/process.defs>.  */
-error_t
+kern_return_t
 S_proc_get_code (struct proc *callerp,
 		 vm_address_t *start_code,
 		 vm_address_t *end_code)
@@ -1166,7 +1361,7 @@ S_proc_get_code (struct proc *callerp,
 }
 
 /* Handle new task notifications from the kernel.  */
-error_t
+kern_return_t
 S_mach_notify_new_task (struct port_info *notify,
 			mach_port_t task,
 			mach_port_t parent)
@@ -1178,13 +1373,12 @@ S_mach_notify_new_task (struct port_info *notify,
       || (kernel_proc != NULL && notify != (struct port_info *) kernel_proc))
     return EOPNOTSUPP;
 
+  if (task == MACH_PORT_DEAD)
+    return ESRCH;
+
   parentp = task_find_nocreate (parent);
   if (! parentp)
-    {
-      mach_port_deallocate (mach_task_self (), task);
-      mach_port_deallocate (mach_task_self (), parent);
-      return ESRCH;
-    }
+    return ESRCH;
 
   childp = task_find_nocreate (task);
   if (! childp)
@@ -1213,7 +1407,7 @@ S_mach_notify_new_task (struct port_info *notify,
 
 /* Implement proc_make_task_namespace as described in
    <hurd/process.defs>.  */
-error_t
+kern_return_t
 S_proc_make_task_namespace (struct proc *callerp,
 			    mach_port_t notify)
 {
@@ -1224,10 +1418,7 @@ S_proc_make_task_namespace (struct proc *callerp,
     return EINVAL;
 
   if (MACH_PORT_VALID (callerp->p_task_namespace))
-    {
-      mach_port_deallocate (mach_task_self (), notify);
-      return EBUSY;
-    }
+    return EBUSY;
 
   callerp->p_task_namespace = notify;
 

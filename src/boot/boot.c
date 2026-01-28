@@ -27,13 +27,13 @@
 #include <mach/message.h>
 #include <mach/mig_errors.h>
 #include <mach/task_notify.h>
+#include <mach/gnumach.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <pthread.h>
 #include <fcntl.h>
 #include <mach/mig_support.h>
-#include <mach/default_pager.h>
 #include <argp.h>
 #include <hurd/store.h>
 #include <hurd/ihash.h>
@@ -41,13 +41,13 @@
 #include <sys/mman.h>
 #include <version.h>
 
+#include "default_pager_U.h"
 #include "notify_S.h"
 #include "device_S.h"
 #include "io_S.h"
 #include "device_reply_U.h"
 #include "io_reply_U.h"
 #include "term_S.h"
-#include "bootstrap_S.h"
 /* #include "tioctl_S.h" */
 #include "mach_S.h"
 #include "mach_host_S.h"
@@ -83,7 +83,7 @@ static int isig;
 static char *kernel_command_line;
 
 static void
-init_termstate ()
+init_termstate (void)
 {
   struct termios tty_state;
 
@@ -100,7 +100,7 @@ init_termstate ()
 }
 
 static void
-restore_termstate ()
+restore_termstate (void)
 {
   tcsetattr (0, 0, &orig_tty_state);
 }
@@ -147,9 +147,6 @@ int console_mscount;
 vm_address_t fs_stack_base;
 vm_size_t fs_stack_size;
 
-void init_termstate ();
-void restore_termstate ();
-
 char *fsname;
 
 char bootstrap_args[100] = "-";
@@ -157,11 +154,6 @@ char *bootdevice = 0;
 char *bootscript = 0;
 
 
-void safe_gets (char *buf, int buf_len)
-{
-  fgets (buf, buf_len, stdin);
-}
-
 extern char *useropen_dir;
 
 /* XXX: glibc should provide mig_reply_setup but does not.  */
@@ -172,14 +164,14 @@ mig_reply_setup (
 	mach_msg_header_t	*out)
 {
       static const mach_msg_type_t RetCodeType = {
-		/* msgt_name = */		MACH_MSG_TYPE_INTEGER_32,
-		/* msgt_size = */		32,
-		/* msgt_number = */		1,
-		/* msgt_inline = */		TRUE,
-		/* msgt_longform = */		FALSE,
-		/* msgt_deallocate = */		FALSE,
-		/* msgt_unused = */		0
-	};
+        .msgt_name = MACH_MSG_TYPE_INTEGER_32,
+        .msgt_size = 32,
+        .msgt_number = 1,
+        .msgt_inline = TRUE,
+        .msgt_longform = FALSE,
+        .msgt_deallocate = FALSE,
+        .msgt_unused = 0
+      };
 
 #define	InP	(in)
 #define	OutP	((mig_reply_header_t *) out)
@@ -273,8 +265,8 @@ boot_demuxer (mach_msg_header_t *inp,
     return FALSE;
 }
 
-void read_reply ();
-void * msg_thread (void *);
+static void read_reply (void);
+static void * msg_thread (void *);
 
 const char *argp_program_version = STANDARD_HURD_VERSION (boot);
 
@@ -342,7 +334,7 @@ add_dev_map (const char *dev_name, const char *dev_file)
   return map;
 }
 
-static struct dev_map *lookup_dev (char *dev_name)
+static struct dev_map *lookup_dev (const char *dev_name)
 {
   struct dev_map *map;
 
@@ -465,17 +457,20 @@ read_boot_script (char **buffer, size_t *length)
   static const char memmsg[] = "Not enough memory\n";
   int i, fd;
   size_t amt, len;
+  ssize_t err;
 
   fd = open (bootscript, O_RDONLY, 0);
   if (fd < 0)
     {
-      write (2, filemsg, sizeof (filemsg));
+      err = write (2, filemsg, sizeof (filemsg));
+      assert_backtrace (err == (sizeof (filemsg)));
       host_exit (1);
     }
   p = buf = malloc (500);
   if (!buf)
     {
-      write (2, memmsg, sizeof (memmsg));
+      err = write (2, memmsg, sizeof (memmsg));
+      assert_backtrace (err == (sizeof (memmsg)));
       host_exit (1);
     }
   len = 500;
@@ -490,15 +485,17 @@ read_boot_script (char **buffer, size_t *length)
       if (p == buf + len)
         {
           char *newbuf;
+          size_t newlen = len + 500;
 
-          len += 500;
-          newbuf = realloc (buf, len);
+          newbuf = realloc (buf, newlen);
           if (!newbuf)
             {
-              write (2, memmsg, sizeof (memmsg));
+              err = write (2, memmsg, sizeof (memmsg));
+              assert_backtrace (err == (sizeof (memmsg)));
               host_exit (1);
             }
-          p = newbuf + (p - buf);
+          p = newbuf + len;
+          len = newlen;
           buf = newbuf;
         }
     }
@@ -531,7 +528,7 @@ const char *default_boot_script =
      and its task port saved in ${exec-task} to be passed to the fs
      above, but it is left suspended; the fs will resume the exec task
      once it is ready.  */
-  "/lib/ld.so /hurd/exec $(exec-task=task-create)"
+  "/hurd/exec.static $(exec-task=task-create)"
   "\n";
 
 
@@ -559,9 +556,10 @@ main (int argc, char **argv, char **envp)
 
   if (want_privileged)
     {
-      get_privileged_ports (&privileged_host_port, &master_device_port);
-      privileged = MACH_PORT_VALID (master_device_port);
+      if (get_privileged_ports (&privileged_host_port, &master_device_port))
+        error (1, 0, "Must be run as root for privileged subhurds");
 
+      privileged = MACH_PORT_VALID (master_device_port);
       if (! privileged)
         error (1, 0, "Must be run as root for privileged subhurds");
     }
@@ -637,31 +635,38 @@ main (int argc, char **argv, char **envp)
       err = task_create (mach_task_self (), 0, &pseudo_kernel);
       if (err)
         error (1, err, "task_create");
+
+      /* Give it a name so it's easy to spot it from the real kernel.  */
+      task_set_name (pseudo_kernel, "pseudo_kernel");
     }
 
   if (kernel_command_line == 0)
-    asprintf (&kernel_command_line, "%s %s root=%s",
-	      argv[0], bootstrap_args, bootdevice);
+    {
+      int err2 = asprintf (&kernel_command_line, "%s %s root=%s",
+		argv[0], bootstrap_args, bootdevice);
+      assert_backtrace (err2 != -1);
+    }
 
   /* Initialize boot script variables.  */
   if (boot_script_set_variable ("host-port", VAL_PORT,
                                 privileged
-                                ? (int) privileged_host_port
-				: (int) pseudo_privileged_host_port)
+                                ? privileged_host_port
+				: pseudo_privileged_host_port)
       || boot_script_set_variable ("device-port", VAL_PORT,
-				   (integer_t) pseudo_master_device_port)
+				   pseudo_master_device_port)
       || boot_script_set_variable ("kernel-task", VAL_PORT,
-				   (integer_t) pseudo_kernel)
+				   pseudo_kernel)
       || boot_script_set_variable ("kernel-command-line", VAL_STR,
-				   (integer_t) kernel_command_line)
+				   (intptr_t) kernel_command_line)
       || boot_script_set_variable ("root-device",
-				   VAL_STR, (integer_t) bootdevice)
+				   VAL_STR, (intptr_t) bootdevice)
       || boot_script_set_variable ("boot-args",
-				   VAL_STR, (integer_t) bootstrap_args))
+				   VAL_STR, (intptr_t) bootstrap_args))
     {
       static const char msg[] = "error setting variable";
-
-      write (2, msg, strlen (msg));
+      size_t len = strlen (msg);
+      ssize_t err2 = write (2, msg, len);
+      assert_backtrace (err2 == len);
       host_exit (1);
     }
 
@@ -678,14 +683,16 @@ main (int argc, char **argv, char **envp)
        if (eq == 0)
          continue;
        *eq++ = '\0';
-       err = boot_script_set_variable (word, VAL_STR, (integer_t) eq);
+       err = boot_script_set_variable (word, VAL_STR, (intptr_t) eq);
        if (err)
          {
            char *msg;
-           asprintf (&msg, "cannot set boot-script variable %s: %s\n",
-                     word, boot_script_error_string (err));
-           assert_backtrace (msg);
-           write (2, msg, strlen (msg));
+           ssize_t err2 = asprintf (&msg, "cannot set boot-script variable %s: %s\n",
+				    word, boot_script_error_string (err));
+           assert_backtrace (err2 != -1);
+           len = strlen (msg);
+           err2 = write (2, msg, len);
+           assert_backtrace (err2 == len);
            free (msg);
            host_exit (1);
          }
@@ -710,15 +717,21 @@ main (int argc, char **argv, char **envp)
 	err = boot_script_parse_line (0, line);
 	if (err)
 	  {
+	    ssize_t err2;
 	    char *str;
 	    int i;
 
 	    str = boot_script_error_string (err);
 	    i = strlen (str);
-	    write (2, str, i);
-	    write (2, " in `", 5);
-	    write (2, line, strlen (line));
-	    write (2, "'\n", 2);
+	    err2 = write (2, str, i);
+	    assert_backtrace (err2 == i);
+	    err2 = write (2, " in `", 5);
+	    assert_backtrace (err2 == 5);
+	    i = strlen (line);
+	    err2 = write (2, line, i);
+	    assert_backtrace (err2 == i);
+	    err2 = write (2, "'\n", 2);
+	    assert_backtrace (err2 == 2);
 	    host_exit (1);
 	  }
 	if (p == buf + amt)
@@ -730,9 +743,13 @@ main (int argc, char **argv, char **envp)
   if (index (bootstrap_args, 'd'))
     {
       static const char msg[] = "Pausing. . .";
+      size_t msg_len = sizeof (msg) - 1;
       char c;
-      write (2, msg, sizeof (msg) - 1);
-      read (0, &c, 1);
+      ssize_t err2;
+      err2 = write (2, msg, msg_len);
+      assert_backtrace (err2 == msg_len);
+      err2 = read (0, &c, 1);
+      assert_backtrace (err2 == 1);
     }
 
   init_termstate ();
@@ -743,11 +760,14 @@ main (int argc, char **argv, char **envp)
     err = boot_script_exec ();
     if (err)
       {
+	ssize_t err2;
 	char *str = boot_script_error_string (err);
 	int i = strlen (str);
 
-	write (2, str, i);
-	write (2, "\n",  1);
+	err2 = write (2, str, i);
+	assert_backtrace (err2 == i);
+	err2 = write (2, "\n",  1);
+	assert_backtrace (err2 == 1);
 	host_exit (1);
       }
     free (buf);
@@ -777,9 +797,10 @@ main (int argc, char **argv, char **envp)
     }
 }
 
-void *
+void * __attribute__ ((noreturn))
 msg_thread (void *arg)
 {
+  pthread_setname_np (pthread_self (), "msg");
   while (1)
     mach_msg_server (boot_demuxer, 0, receive_set);
 }
@@ -835,8 +856,8 @@ queue_read (enum read_type type,
 static int should_read = 0;
 
 /* Reply to a queued read. */
-void
-read_reply ()
+static void
+read_reply (void)
 {
   int avail;
   struct qr *qr;
@@ -918,25 +939,13 @@ read_reply ()
 /* Unlock READLOCK, and also service any new read requests that it was
    blocking.  */
 static void
-unlock_readlock ()
+unlock_readlock (void)
 {
   pthread_spin_unlock (&readlock);
   while (should_read)
     read_reply ();
 }
 
-/*
- *	Handle bootstrap requests.
- */
-kern_return_t
-do_bootstrap_privileged_ports(bootstrap, hostp, devicep)
-	mach_port_t bootstrap;
-	mach_port_t *hostp, *devicep;
-{
-	*hostp = privileged_host_port;
-	*devicep = pseudo_master_device_port;
-	return KERN_SUCCESS;
-}
 
 /* Implementation of device interface */
 
@@ -945,7 +954,7 @@ ds_device_open (mach_port_t master_port,
 		mach_port_t reply_port,
 		mach_msg_type_name_t reply_type,
 		dev_mode_t mode,
-		dev_name_t name,
+		const_dev_name_t name,
 		mach_port_t *device,
 		mach_msg_type_name_t *devicetype)
 {
@@ -1007,6 +1016,19 @@ ds_device_open (mach_port_t master_port,
 }
 
 kern_return_t
+ds_device_open_new (mach_port_t master_port,
+		mach_port_t reply_port,
+		mach_msg_type_name_t reply_type,
+		dev_mode_t mode,
+		const_dev_name_t name,
+		mach_port_t *device,
+		mach_msg_type_name_t *devicetype)
+{
+  return ds_device_open (master_port, reply_port, reply_type, mode,
+      name, device, devicetype);
+}
+
+kern_return_t
 ds_device_close (device_t device)
 {
   if (device != pseudo_console && device != pseudo_root)
@@ -1021,7 +1043,7 @@ ds_device_write (device_t device,
 		 dev_mode_t mode,
 		 recnum_t recnum,
 		 io_buf_ptr_t data,
-		 size_t datalen,
+		 mach_msg_type_number_t datalen,
 		 int *bytes_written)
 {
   if (device == pseudo_console)
@@ -1057,8 +1079,8 @@ ds_device_write_inband (device_t device,
 			mach_msg_type_name_t reply_type,
 			dev_mode_t mode,
 			recnum_t recnum,
-			io_buf_ptr_inband_t data,
-			size_t datalen,
+			const io_buf_ptr_inband_t data,
+			mach_msg_type_number_t datalen,
 			int *bytes_written)
 {
   if (device == pseudo_console)
@@ -1096,8 +1118,9 @@ ds_device_read (device_t device,
 		recnum_t recnum,
 		int bytes_wanted,
 		io_buf_ptr_t *data,
-		size_t *datalen)
+		mach_msg_type_number_t *datalen)
 {
+  error_t err;
   if (device == pseudo_console)
     {
       int avail;
@@ -1122,8 +1145,6 @@ ds_device_read (device_t device,
 	}
       else
 	{
-	  kern_return_t err;
-
 	  unlock_readlock ();
 	  err = queue_read (DEV_READ, reply_port, reply_type, bytes_wanted);
 	  if (err)
@@ -1133,11 +1154,12 @@ ds_device_read (device_t device,
     }
   else if (device == pseudo_root)
     {
-      *datalen = 0;
-      return
-	(store_read (root_store, recnum, bytes_wanted, (void **)data, datalen) == 0
-	 ? D_SUCCESS
-	 : D_IO_ERROR);
+      size_t data_size = 0;
+      err = store_read (root_store, recnum, bytes_wanted, (void **)data, &data_size);
+      if (err)
+        return D_IO_ERROR;
+      *datalen = data_size;
+      return D_SUCCESS;
     }
   else
     return D_NO_SUCH_DEVICE;
@@ -1151,7 +1173,7 @@ ds_device_read_inband (device_t device,
 		       recnum_t recnum,
 		       int bytes_wanted,
 		       io_buf_ptr_inband_t data,
-		       size_t *datalen)
+		       mach_msg_type_number_t *datalen)
 {
   if (device == pseudo_console)
     {
@@ -1189,17 +1211,18 @@ ds_device_read_inband (device_t device,
     {
       error_t err;
       void *returned = data;
+      size_t data_size = bytes_wanted;
 
-      *datalen = bytes_wanted;
-      err =
-	store_read (root_store, recnum, bytes_wanted, (void **)&returned, datalen);
+      err = store_read (root_store, recnum, bytes_wanted,
+			(void **)&returned, &data_size);
+      *datalen = data_size;
 
       if (! err)
 	{
 	  if (returned != data)
 	    {
-	      memcpy ((void *)data, returned, *datalen);
-	      munmap ((caddr_t) returned, *datalen);
+	      memcpy ((void *)data, returned, data_size);
+	      munmap ((caddr_t) returned, data_size);
 	    }
 	  return D_SUCCESS;
 	}
@@ -1244,7 +1267,7 @@ kern_return_t
 ds_device_set_status (device_t device,
 		      dev_flavor_t flavor,
 		      dev_status_t status,
-		      size_t statuslen)
+		      mach_msg_type_number_t statuslen)
 {
   if (device != pseudo_console && device != pseudo_root)
     return D_NO_SUCH_DEVICE;
@@ -1255,7 +1278,7 @@ kern_return_t
 ds_device_get_status (device_t device,
 		      dev_flavor_t flavor,
 		      dev_status_t status,
-		      size_t *statuslen)
+		      mach_msg_type_number_t *statuslen)
 {
   if (device == pseudo_console)
     return D_INVALID_OPERATION;
@@ -1290,7 +1313,7 @@ ds_device_set_filter (device_t device,
 		      mach_port_t receive_port,
 		      int priority,
 		      filter_array_t filter,
-		      size_t filterlen)
+		      mach_msg_type_number_t filterlen)
 {
   if (device != pseudo_console && device != pseudo_root)
     return D_NO_SUCH_DEVICE;
@@ -1340,6 +1363,7 @@ kern_return_t
 do_mach_notify_no_senders (mach_port_t notify,
 			   mach_port_mscount_t mscount)
 {
+  ssize_t err;
   static int no_console;
   mach_port_t foo;
   if (notify == pseudo_master_device_port)
@@ -1356,7 +1380,8 @@ do_mach_notify_no_senders (mach_port_t notify,
 	{
 	bye:
 	  restore_termstate ();
-	  write (2, "bye\n", 4);
+	  err = write (2, "bye\n", 4);
+	  assert_backtrace (err == 4);
 	  host_exit (0);
 	}
       else
@@ -1409,10 +1434,10 @@ kern_return_t
 S_io_write (mach_port_t object,
 	    mach_port_t reply_port,
 	    mach_msg_type_name_t reply_type,
-	    data_t data,
+	    const_data_t data,
 	    mach_msg_type_number_t datalen,
 	    off_t offset,
-	    mach_msg_type_number_t *amtwritten)
+	    vm_size_t *amtwritten)
 {
   if (object != pseudo_console)
     return EOPNOTSUPP;
@@ -1437,7 +1462,7 @@ S_io_read (mach_port_t object,
 	   data_t *data,
 	   mach_msg_type_number_t *datalen,
 	   off_t offset,
-	   mach_msg_type_number_t amount)
+	   vm_size_t amount)
 {
   mach_msg_type_number_t avail;
 
@@ -1457,9 +1482,12 @@ S_io_read (mach_port_t object,
   ioctl (0, FIONREAD, &avail);
   if (avail)
     {
+      data_t orig_data = *data;
       if (amount > *datalen)
 	*data = mmap (0, amount, PROT_READ|PROT_WRITE, MAP_ANON, 0, 0);
       *datalen = read (0, *data, amount);
+      if (*datalen == -1 && *data != orig_data)
+	munmap (*data, amount);
       unlock_readlock ();
       return *datalen == -1 ? errno : 0;
     }
@@ -1489,7 +1517,7 @@ kern_return_t
 S_io_readable (mach_port_t object,
 	       mach_port_t reply_port,
 	       mach_msg_type_name_t reply_type,
-	       mach_msg_type_number_t *amt)
+	       vm_size_t *amt)
 {
   if (object != pseudo_console)
     return EOPNOTSUPP;
@@ -1661,7 +1689,7 @@ S_io_reauthenticate (mach_port_t object,
 {
   uid_t *gu, *au;
   gid_t *gg, *ag;
-  size_t gulen = 0, aulen = 0, gglen = 0, aglen = 0;
+  mach_msg_type_number_t gulen = 0, aulen = 0, gglen = 0, aglen = 0;
   error_t err;
 
   /* XXX: This cannot possibly work, authserver is 0.  */
@@ -1699,10 +1727,10 @@ S_io_restrict_auth (mach_port_t object,
 		    mach_msg_type_name_t reply_type,
 		    mach_port_t *newobject,
 		    mach_msg_type_name_t *newobjtype,
-		    uid_t *uids,
-		    size_t nuids,
-		    uid_t *gids,
-		    size_t ngids)
+		    const uid_t *uids,
+		    mach_msg_type_number_t nuids,
+		    const uid_t *gids,
+		    mach_msg_type_number_t ngids)
 {
   if (object != pseudo_console)
     return EOPNOTSUPP;
@@ -1731,7 +1759,7 @@ kern_return_t
 S_io_server_version (mach_port_t object,
 		     mach_port_t reply_port,
 		     mach_msg_type_name_t reply_type,
-		     char *name,
+		     string_t name,
 		     int *maj,
 		     int *min,
 		     int *edit)
@@ -1906,7 +1934,7 @@ kern_return_t S_term_open_ctty
 kern_return_t S_term_set_nodename
 (
 	io_t terminal,
-	string_t name
+	const_string_t name
 )
 { return EOPNOTSUPP; }
 
@@ -2021,7 +2049,7 @@ static void
 task_ihash_cleanup (hurd_ihash_value_t value, void *cookie)
 {
   (void) cookie;
-  mach_port_deallocate (mach_task_self (), (mach_port_t) value);
+  mach_port_deallocate (mach_task_self (), (mach_port_t)(uintptr_t) value);
 }
 
 static struct hurd_ihash task_ihash =
@@ -2032,13 +2060,13 @@ static void
 task_died (mach_port_t name)
 {
   if (verbose > 1)
-    fprintf (stderr, "Task '%lu' died.\r\n", name);
+    fprintf (stderr, "Task '%u' died.\r\n", name);
 
   hurd_ihash_remove (&task_ihash, (hurd_ihash_key_t) name);
 }
 
 /* Handle new task notifications from proc.  */
-error_t
+kern_return_t
 S_mach_notify_new_task (mach_port_t notify,
 			mach_port_t task,
 			mach_port_t parent)
@@ -2050,7 +2078,7 @@ S_mach_notify_new_task (mach_port_t notify,
     return EOPNOTSUPP;
 
   if (verbose > 1)
-    fprintf (stderr, "Task '%lu' created by task '%lu'.\r\n", task, parent);
+    fprintf (stderr, "Task '%u' created by task '%u'.\r\n", task, parent);
 
   err = mach_port_request_notification (mach_task_self (), task,
                                         MACH_NOTIFY_DEAD_NAME, 0,
@@ -2063,7 +2091,8 @@ S_mach_notify_new_task (mach_port_t notify,
 
   mach_port_mod_refs (mach_task_self (), task, MACH_PORT_RIGHT_SEND, +1);
   err = hurd_ihash_add (&task_ihash,
-                        (hurd_ihash_key_t) task, (hurd_ihash_value_t) task);
+                        (hurd_ihash_key_t) task,
+			(hurd_ihash_value_t)(uintptr_t) task);
   if (err)
     {
       mach_port_deallocate (mach_task_self (), task);
@@ -2108,7 +2137,7 @@ S_processor_set_tasks(mach_port_t processor_set,
   i = 1;
   HURD_IHASH_ITERATE (&task_ihash, value)
     {
-      task_t task = (task_t) value;
+      task_t task = (task_t)(uintptr_t) value;
       if (task == pseudo_kernel)
         continue;
 

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 #
 # This program is run by /hurd/init at boot time after the essential
 # servers are up.  It does some initialization of its own and then
@@ -17,7 +17,7 @@ export PATH
 umask 022
 
 # If we lose badly, try to exec each of these in turn.
-fallback_shells='/bin/sh /bin/bash /bin/csh /bin/ash /bin/shd'
+fallback_shells='/bin/bash /bin/sh /bin/dash /bin/csh /bin/ash /bin/shd'
 
 # Shell used for normal single-user startup.
 SHELL=/bin/sh
@@ -32,18 +32,18 @@ init=/hurd/init
 
 # If we get a SIGLOST, attempt to reopen the console in case
 # our console ports were revoked.  This lets us print messages.
-function reopen_console ()
+reopen_console ()
 {
   exec 1>/dev/console 2>&1 || exit 3
 }
-trap 'reopen_console' SIGLOST
+trap 'reopen_console' 32 # SIGLOST = server died on GNU
 
 
 # Call this when we are losing badly enough that we want to punt normal
 # startup entirely.  We exec a single-user shell, so we will not come back
 # here.  The only way to get to multi-user from that shell will be
 # explicitly exec this script or something like that.
-function singleuser()
+singleuser ()
 {
   test $# -eq 0 || echo "$0: $*"
   for try in ${fallback_shells}; do
@@ -53,14 +53,16 @@ function singleuser()
   exit 127
 }
 
-# Print a newline.
+# Print a newline and banner.
 echo
+echo Starting runsystem
 
 # See whether pflocal is set up already, and do so if not (install case)
 #
 # Normally this should be the case, but we better make sure since
 # without the pflocal server, pipe(2) does not work.
-if ! test -e /servers/socket/1 ; then
+if ! test -c /servers/socket/1 && command -v settrans >/dev/null ; then
+  echo Setting up pflocal
   # The root filesystem should be read-only at this point.
   if fsysopts / --update --writable ; then
     settrans -c /servers/socket/1 /hurd/pflocal
@@ -83,8 +85,6 @@ fi
 ###
 
 # Parse the multiboot command line.  We only pay attention to -s and -f.
-# The first argument is the kernel file name; skip that.
-shift
 flags=
 single=
 while [ $# -gt 0 ]; do
@@ -114,11 +114,9 @@ case "$flags" in
   ;;
 esac
 
-# Start the default pager.  It will bail if there is already one running.
-/hurd/mach-defpager
-
 # This is necessary to make stat / return the correct device ids.
 fsysopts / --update --readonly
 
-# Finally, start the actual init.
+# Finally, start the actual SysV init.
+echo Starting ${init}
 exec ${init} ${single} -a

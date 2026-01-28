@@ -48,25 +48,53 @@ dev_error (error_t err)
 }
 
 static error_t
-dev_read (struct store *store,
-	  store_offset_t addr, size_t index, mach_msg_type_number_t amount,
-	  void **buf, mach_msg_type_number_t *len)
+dev_read (struct store *store, store_offset_t addr,
+          size_t index, size_t amount,
+          void **buf, size_t *len)
 {
-  return dev_error (device_read (store->port, 0, addr, amount,
-				 (io_buf_ptr_t *)buf, len));
+  error_t err;
+  recnum_t recnum = addr;
+  mach_msg_type_number_t nread;
+
+  if (recnum != addr)
+    return EOVERFLOW;
+
+  err = device_read (store->port, 0, recnum, amount,
+                     (io_buf_ptr_t *) buf, &nread);
+  if (err)
+    return dev_error (err);
+
+  *len = nread;
+  return 0;
 }
 
 static error_t
-dev_write (struct store *store,
-	   store_offset_t addr, size_t index,
-	   const void *buf, mach_msg_type_number_t len,
-	   mach_msg_type_number_t *amount)
+dev_write (struct store *store, store_offset_t addr,
+           size_t index, const void *buf,
+           size_t len, size_t *amount)
 {
-  error_t err = dev_error (device_write (store->port, 0, addr,
+  recnum_t recnum = addr;
+  error_t err;
+  int amount_r;
+
+  if (recnum != addr)
+    return EOVERFLOW;
+
+  err = dev_error (device_write (store->port, 0, addr,
 					 (io_buf_ptr_t)buf, len,
-					 (int *) amount));
-  *amount = *(int *) amount;	/* stupid device.defs uses int */
+					 &amount_r));
+  *amount = amount_r;
   return err;
+}
+
+static error_t
+dev_sync (struct store *store)
+{
+#ifdef DEV_FLUSH_CACHE
+  return device_set_status (store->port, DEV_FLUSH_CACHE, NULL, 0);
+#else
+  return EOPNOTSUPP;
+#endif
 }
 
 static error_t
@@ -183,7 +211,7 @@ enforced (struct store *store)
 {
   error_t err;
   dev_status_data_t sizes;
-  size_t sizes_len = DEV_STATUS_MAX;
+  mach_msg_type_number_t sizes_len = DEV_STATUS_MAX;
 
   if (store->num_runs != 1 || store->runs[0].start != 0)
     /* Can't enforce non-contiguous ranges, or one not starting at 0.  */
@@ -300,7 +328,7 @@ store_device_class =
 {
   STORAGE_DEVICE, "device", dev_read, dev_write, dev_set_size,
   store_std_leaf_allocate_encoding, store_std_leaf_encode, dev_decode,
-  dev_set_flags, dev_clear_flags, 0, 0, 0, dev_open, 0, dev_map
+  dev_set_flags, dev_clear_flags, 0, 0, 0, dev_open, 0, dev_map, dev_sync
 };
 STORE_STD_CLASS (device);
 
@@ -312,7 +340,7 @@ store_device_create (device_t device, int flags, struct store **store)
   struct store_run run;
   size_t block_size = 0;
   dev_status_data_t sizes;
-  size_t sizes_len = DEV_STATUS_MAX;
+  mach_msg_type_number_t sizes_len = DEV_STATUS_MAX;
   error_t err;
 
 #ifdef DEV_GET_RECORDS

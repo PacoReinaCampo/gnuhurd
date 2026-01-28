@@ -32,11 +32,11 @@
 #include "nfsd.h"
 
 
-#undef TRUE
-#undef FALSE
 #define malloc spoogie_woogie	/* ugh^2. */
 #include <rpc/types.h>
 #include <rpc/auth.h>
+#undef TRUE
+#undef FALSE
 #undef malloc
 
 #define IDHASH_TABLE_SIZE 1024
@@ -209,7 +209,7 @@ cred_ref (struct idspec *i)
 }
 
 void
-scan_creds ()
+scan_creds (void)
 {
   int n;
   int newleast = mapped_time->seconds;
@@ -337,7 +337,7 @@ cache_handle_rele (struct cache_handle *c)
 }
 
 void
-scan_fhs ()
+scan_fhs (void)
 {
   int n;
   int newleast = mapped_time->seconds;
@@ -387,7 +387,7 @@ create_cached_handle (int fs, struct cache_handle *credc, file_t userport)
   struct cache_handle *c;
   int hash;
   char *bp = fhandle.array + sizeof (int);
-  size_t handlelen = NFS2_FHSIZE - sizeof (int);
+  mach_msg_type_number_t handlelen = NFS2_FHSIZE - sizeof (int);
   mach_port_t newport, ref;
 
   /* Authenticate USERPORT so that we can call file_getfh on it.  */
@@ -534,7 +534,7 @@ release_cached_reply (struct cached_reply *cr)
 }
 
 void
-scan_replies ()
+scan_replies (void)
 {
   int n;
   int newleast = mapped_time->seconds;

@@ -27,13 +27,13 @@
 #include "callbacks.h"
 #include "misc.h"
 
-error_t
+kern_return_t
 netfs_S_dir_lookup (struct protid *dircred,
-		    char *filename,
+		    const_string_t filename,
 		    int flags,
 		    mode_t mode,
 		    retry_type *do_retry,
-		    char *retry_name,
+		    string_t retry_name,
 		    mach_port_t *retry_port,
 		    mach_msg_type_name_t *retry_port_type)
 {
@@ -67,7 +67,7 @@ netfs_S_dir_lookup (struct protid *dircred,
 
   /* Keep a pointer to the start of the filename for length
      calculations.  */
-  char *filename_start = filename;
+  const char *filename_start = filename;
 
   *retry_port_type = MACH_MSG_TYPE_MAKE_SEND;
   *do_retry = FS_RETRY_NORMAL;
@@ -277,6 +277,8 @@ netfs_S_dir_lookup (struct protid *dircred,
 		char *translator_path = strdupa (relpath);
 		char *end;
 		char *complete_path;
+                struct port_info *notify_port;
+
 		if (nextname != NULL)
 		  {
 		    /* This was not the last path component.
@@ -299,10 +301,18 @@ netfs_S_dir_lookup (struct protid *dircred,
 		  /* dircred is the root directory.  */
 		  complete_path = translator_path;
 		else
-		  asprintf (&complete_path, "%s/%s", dircred->po->path,
-			    translator_path);
+		  {
+		      err = asprintf (&complete_path, "%s/%s", dircred->po->path,
+		                      translator_path);
+		      if (err == -1)
+			{
+			  err = errno;
+			  goto out;
+			}
+		  }
 
-		err = fshelp_set_active_translator (&newpi->pi,
+                notify_port = newpi->pi.bucket->notify_port;
+                err = fshelp_set_active_translator (notify_port,
 						    complete_path,
 						    &np->transbox);
 		if (complete_path != translator_path)
@@ -407,9 +417,11 @@ netfs_S_dir_lookup (struct protid *dircred,
   /* At this point, NP is the node to return.  */
  gotit:
 
-  if (mustbedir)
+  if (mustbedir || (flags & O_DIRECTORY))
     {
-      netfs_validate_stat (np, dircred->user);
+      err = netfs_validate_stat (np, dircred->user);
+      if (err)
+	goto out;
       if (!S_ISDIR (np->nn_stat.st_mode))
 	{
 	  err = ENOTDIR;
@@ -471,7 +483,10 @@ netfs_S_dir_lookup (struct protid *dircred,
       else
 	{
 	  newpi->po->path = NULL;
-	  asprintf (&newpi->po->path, "%s/%s", dircred->po->path, relpath);
+	  int err2 = asprintf (&newpi->po->path, "%s/%s", dircred->po->path, relpath);
+	  /* If asprintf fails set path to NULL so that the if below checks errno. */
+	  if (err2 == -1)
+	    newpi->po->path = NULL;
 	}
 
       if (! newpi->po->path)

@@ -21,6 +21,7 @@
 #include "nfsd.h"
 #include <stdio.h>
 #include <unistd.h>
+#include <rpc/xdr.h>
 #include <rpc/pmap_prot.h>
 #include <maptime.h>
 #include <hurd.h>
@@ -43,7 +44,7 @@ create_server_thread (int socket)
   pthread_t thread;
   int fail;
 
-  fail = pthread_create (&thread, NULL, server_loop, (void *) socket);
+  fail = pthread_create (&thread, NULL, server_loop, (void *)(intptr_t) socket);
   if (fail)
     error (1, fail, "Creating main server thread");
 

@@ -27,6 +27,7 @@
 #include <sys/types.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 #include "vga-hw.h"
 #include "vga-support.h"
@@ -147,13 +148,13 @@ vga_init (void)
   outb (VGA_GFX_MODE_ADDR, VGA_GFX_ADDR_REG);
   outb (VGA_GFX_MODE_HOSTOE, VGA_GFX_DATA_REG);
 
-  memcpy (vga_state->videomem, vga_videomem, 2 * 80 * 25);
+  vga_memcpy (vga_state->videomem, vga_videomem, 2 * 80 * 25);
   vga_read_font_buffer (0, 0, vga_state->fontmem,
 			2 * VGA_FONT_SIZE * VGA_FONT_HEIGHT);
 
   /* 80 cols, 25 rows, two bytes per cell and twice because with lower
      max scan line we get more lines on the screen.  */
-  memset (vga_videomem, 0, 80 * 25 * 2 * 2);
+  vga_memset (vga_videomem, 0, 80 * 25 * 2 * 2);
 
   return 0;
 }
@@ -167,7 +168,7 @@ vga_fini (void)
   /* Recover the saved state.  */
   vga_write_font_buffer (0, 0, vga_state->fontmem,
 			 2 * VGA_FONT_SIZE * VGA_FONT_HEIGHT);
-  memcpy (vga_videomem, vga_state->videomem, 2 * 80 * 25);
+  vga_memcpy (vga_videomem, vga_state->videomem, 2 * 80 * 25);
 
   /* Restore the registers.  */
   outb (VGA_SEQ_CLOCK_MODE_ADDR, VGA_SEQ_ADDR_REG);
@@ -211,6 +212,46 @@ vga_fini (void)
 }
 
 
+/* VGA boards may not like AVX-whatnot-optimized 512B accesses, so use
+   non-optimized versions of string operations for vga_videomem.  */
+
+/* Non-optimized memset for vga_videomem */
+void vga_memset (void *__restrict _s, int c, size_t n)
+{
+  uint8_t * __restrict s = _s;
+  size_t i;
+
+  for (i = 0; i < n; i++)
+    s[i] = c;
+}
+
+/* Non-optimized memcpy for vga_videomem */
+void vga_memcpy (void *__restrict _dest, const void *__restrict _src, size_t n)
+{
+  uint8_t * __restrict dest = _dest;
+  const uint8_t * __restrict src = _src;
+  size_t i;
+
+  for (i = 0; i < n; i++)
+    dest[i] = src[i];
+}
+
+/* Non-optimized memmove for vga_videomem */
+void vga_memmove (void *_dest, const void *_src, size_t n)
+{
+  uint8_t * dest = _dest;
+  const uint8_t * src = _src;
+  size_t i;
+
+  if (dest <= src)
+    for (i = 0; i < n; i++)
+      dest[i] = src[i];
+  else
+    for (i = 0; i < n; i++)
+      dest[n-1-i] = src[n-1-i];
+}
+
+
 /* Access the font buffer BUFFER, starting from glyph INDEX, and
    either read DATALEN bytes into DATA (if WRITE is 0) or write
    DATALEN bytes from DATA (if WRITE is not 0).  */
@@ -249,9 +290,9 @@ vga_read_write_font_buffer (int write, int buffer, int index,
   outb (VGA_GFX_MISC_B8TOBF, VGA_GFX_DATA_REG);
 
   if (write)
-    memcpy (vga_videomem + offset, data, datalen);    
+    vga_memcpy (vga_videomem + offset, data, datalen);
   else
-    memcpy (data, vga_videomem + offset, datalen);
+    vga_memcpy (data, vga_videomem + offset, datalen);
 
   /* Restore sequencer and graphic register values.  */
   outb (VGA_SEQ_MAP_ADDR, VGA_SEQ_ADDR_REG);

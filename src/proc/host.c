@@ -79,10 +79,10 @@ S_proc_getprivports (struct proc *p,
 /* Implement proc_setexecdata as described in <hurd/process.defs>. */
 kern_return_t
 S_proc_setexecdata (struct proc *p,
-		    mach_port_t *ports,
-		    size_t nports,
-		    int *ints,
-		    size_t nints)
+		    const mach_port_t *ports,
+		    mach_msg_type_number_t nports,
+		    const int *ints,
+		    mach_msg_type_number_t nints)
 {
   int i;
   struct execdata_notify *n;
@@ -135,9 +135,9 @@ kern_return_t
 S_proc_getexecdata (struct proc *p,
 		    mach_port_t **ports,
 		    mach_msg_type_name_t *portspoly,
-		    size_t *nports,
+		    mach_msg_type_number_t *nports,
 		    int **ints,
-		    size_t *nints)
+		    mach_msg_type_number_t *nints)
 {
   int i;
   int ports_allocated = 0;
@@ -184,9 +184,9 @@ S_proc_execdata_notify (struct proc *p,
 			mach_port_t notify)
 {
   struct execdata_notify *n;
-  mach_port_t foo;
 
-  /* No need to check P here; we don't use it. */
+  if (!p)
+    return EOPNOTSUPP;
 
   n = malloc (sizeof (struct execdata_notify));
   if (! n)
@@ -196,13 +196,7 @@ S_proc_execdata_notify (struct proc *p,
   n->next = execdata_notifys;
   execdata_notifys = n;
 
-  mach_port_request_notification (mach_task_self (), notify,
-				  MACH_NOTIFY_DEAD_NAME, 1,
-				  generic_port, MACH_MSG_TYPE_MAKE_SEND_ONCE,
-				  &foo);
-
-  if (foo)
-    mach_port_deallocate (mach_task_self (), foo);
+  ports_request_dead_name_notification (p, notify, NULL);
 
   if (std_port_array)
     exec_setexecdata (n->notify_port, std_port_array, MACH_MSG_TYPE_COPY_SEND,
@@ -346,11 +340,13 @@ void
 initialize_version_info (void)
 {
   extern const char *const mach_cpu_types[];
+#ifdef __i386__
   extern const char *const mach_cpu_subtypes[][32];
+#endif
   kernel_version_t kv;
   char *p;
   struct host_basic_info info;
-  size_t n = sizeof info;
+  mach_msg_type_number_t n = sizeof info;
   error_t err;
 
   /* Fill in fixed slots sysname and machine.  */
@@ -359,9 +355,16 @@ initialize_version_info (void)
   err = host_info (mach_host_self (), HOST_BASIC_INFO,
 		   (host_info_t) &info, &n);
   assert_backtrace (! err);
-  snprintf (uname_info.machine, sizeof uname_info.machine, "%s-%s",
-	    mach_cpu_types[info.cpu_type],
-	    mach_cpu_subtypes[info.cpu_type][info.cpu_subtype]);
+  snprintf (uname_info.machine, sizeof uname_info.machine,
+	    "%s"
+#ifdef __i386__
+	    "-%s"
+#endif
+	    , mach_cpu_types[info.cpu_type]
+#ifdef __i386__
+	    , mach_cpu_subtypes[info.cpu_type][info.cpu_subtype]
+#endif
+	    );
 
   /* Notice Mach's and our own version and initialize server version
      variables. */
@@ -369,7 +372,15 @@ initialize_version_info (void)
   assert_backtrace (server_versions);
   server_versions_nalloc = 10;
 
-  err = host_kernel_version (mach_host_self (), kv);
+  err = host_get_kernel_version (mach_host_self (), kv);
+#ifdef __i386__
+  /* We only supported host_kernel_version on i386.  */
+  if (err == MIG_BAD_ID)
+    {
+      /* Delete after some time. */
+      err = host_kernel_version (mach_host_self (), kv);
+    }
+#endif
   assert_backtrace (! err);
   /* Make sure the result is null-terminated, as the kernel doesn't
      guarantee it.  */
@@ -409,9 +420,9 @@ S_proc_uname (pstruct_t process,
 kern_return_t
 S_proc_register_version (pstruct_t server,
 			 mach_port_t credential,
-			 char *name,
-			 char *release,
-			 char *version)
+			 const_string_t name,
+			 const_string_t release,
+			 const_string_t version)
 {
   error_t err = 0;
   int i;

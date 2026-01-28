@@ -33,6 +33,7 @@
 #include <lwip_socket_S.h>
 #include <lwip_pfinet_S.h>
 #include <lwip_iioctl_S.h>
+#include <lwip_rioctl_S.h>
 #include <lwip_startup_notify_S.h>
 
 #include <netif/hurdethif.h>
@@ -136,6 +137,7 @@ lwip_demuxer (mach_msg_header_t * inp, mach_msg_header_t * outp)
 
   if (routine || (routine = lwip_socket_server_routine (inp)) ||
       (routine = lwip_pfinet_server_routine (inp)) ||
+      (routine = lwip_rioctl_server_routine (inp)) ||
       (routine = lwip_iioctl_server_routine (inp)) ||
       (routine = lwip_startup_notify_server_routine (inp)))
     {
@@ -159,7 +161,7 @@ translator_bind (int portclass, const char *name)
 
   if (!err)
     {
-      if (lwip_protid_portclasses[portclass] != MACH_PORT_NULL)
+      if (lwip_protid_portclasses[portclass] != NULL)
 	error (1, 0, "Cannot bind one protocol to multiple nodes.\n");
 
       err =
@@ -216,23 +218,23 @@ main (int argc, char **argv)
 
   task_get_bootstrap_port (mach_task_self (), &bootstrap);
   if (bootstrap == MACH_PORT_NULL)
-    error (-1, 0, "Must be started as a translator");
+    error (1, 0, "Must be started as a translator");
 
   /* Create portclass to install on the bootstrap port. */
-  if (lwip_protid_portclasses[lwip_bootstrap_portclass] != MACH_PORT_NULL)
+  if (lwip_protid_portclasses[lwip_bootstrap_portclass] != NULL)
     error (1, 0, "No portclass left to assign to bootstrap port");
 
   err =
     trivfs_add_protid_port_class (&lwip_protid_portclasses
 				  [lwip_bootstrap_portclass]);
   if (err)
-    error (1, 0, "error creating control port class");
+    error (1, err, "error creating control port class");
 
   err =
     trivfs_add_control_port_class (&lwip_cntl_portclasses
 				   [lwip_bootstrap_portclass]);
   if (err)
-    error (1, 0, "error creating control port class");
+    error (1, err, "error creating control port class");
 
   /* Reply to our parent */
   err = trivfs_startup (bootstrap, 0,
@@ -242,9 +244,7 @@ main (int argc, char **argv)
 			lwip_bucket, &lwipcntl);
   mach_port_deallocate (mach_task_self (), bootstrap);
   if (err)
-    {
-      return (-1);
-    }
+    error (1, err, "trivfs_startup failed");
 
   /* Initialize status from underlying node.  */
   lwip_owner = lwip_group = 0;

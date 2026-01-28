@@ -39,7 +39,7 @@ int main_udp_socket;
 char *hostname;
 volatile struct mapped_time_value *mapped_time;
 
-extern char *localhost ();
+extern char *localhost (void);
 
 /* Default number of times to retry RPCs when mounted soft. */
 #define DEFAULT_SOFT_RETRIES  3
@@ -197,7 +197,7 @@ static const struct argp_option startup_options[] = {
      "Port for nfs operations"},
   {"default-nfs-port",      OPT_NFS_PORT_D,"PORT", 0,
      "Port for nfs operations, if none can be found automatically"},
-  {"nfs-program",           OPT_NFS_PROG,  "ID[.VERS]"},
+  {"nfs-program",           OPT_NFS_PROG,  "[ID.]VERS"},
 
   {"pmap-port",             OPT_PMAP_PORT,  "SVC|PORT"},
 
@@ -338,6 +338,30 @@ parse_startup_opt (int key, char *arg, struct argp_state *state)
       nfs_port = atoi (arg);
       break;
 
+    case OPT_NFS_PROG:
+      {
+	const char* version = strrchr (arg, '.');
+	const char* program = NULL;
+
+	if (version != NULL)
+	  {
+	    program = arg;
+	    version++;
+	  }
+	else
+	    version = arg;
+
+	nfs_version = atoi (version);
+	if (program)
+	  nfs_program = atoi (program);
+
+	if (nfs_version < 2 || nfs_version > 3)
+	  argp_error (state, "Invalid NFS version: %d", nfs_version);
+
+	protocol_version = nfs_version;
+      }
+      break;
+
     case ARGP_KEY_ARG:
       if (state->arg_num == 0)
 	remote_fs = arg;
@@ -378,12 +402,16 @@ main (int argc, char **argv)
   struct sockaddr_in addr;
   int ret;
 
-  argp_parse (&argp, argc, argv, 0, 0, 0);
-    
+  err = argp_parse (&argp, argc, argv, 0, 0, 0);
+  if (err)
+    error (1, err, "Invalid command line");
+
   task_get_bootstrap_port (mach_task_self (), &bootstrap);
   netfs_init ();
   
-  main_udp_socket = socket (PF_INET, SOCK_DGRAM, 0);
+  if ((main_udp_socket = socket (PF_INET, SOCK_DGRAM, 0)) == -1)
+    error(1, errno, "Socket failed");
+
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = INADDR_ANY;
   addr.sin_port = htons (IPPORT_RESERVED);

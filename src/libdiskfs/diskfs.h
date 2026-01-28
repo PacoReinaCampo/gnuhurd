@@ -401,20 +401,20 @@ error_t diskfs_drop_dirstat (struct node *dp, struct dirstat *ds);
    then there is no limit on *DATACNT; if N is -1, then there is no limit
    on AMT. */
 error_t diskfs_get_directs (struct node *dp, int entry, int n,
-			    char **data, size_t *datacnt,
+			    char **data, mach_msg_type_number_t *datacnt,
 			    vm_size_t bufsiz, int *amt);
 
 /* The user must define this function.  For locked node NP (for which
    diskfs_node_translated is true) look up the name of its translator.
    Store the name into newly malloced storage; set *NAMELEN to the
    total length.  */
-error_t diskfs_get_translator (struct node *np, char **namep, u_int *namelen);
+error_t diskfs_get_translator (struct node *np, char **namep, mach_msg_type_number_t *namelen);
 
 /* The user must define this function.  For locked node NP, set
    the name of the translating program to be NAME, length NAMELEN.  CRED
    identifies the user responsible for the call.  */
 error_t diskfs_set_translator (struct node *np,
-			       const char *name, u_int namelen,
+			       const char *name, mach_msg_type_number_t namelen,
 			       struct protid *cred);
 
 /* The user must define this function.  Truncate locked node NP to be SIZE
@@ -532,7 +532,7 @@ void diskfs_sync_everything (int wait);
 
 /* Shutdown all pagers; this is done when the filesystem is exiting and is
    irreversable.  */
-void diskfs_shutdown_pager ();
+void diskfs_shutdown_pager (void);
 
 /* The user must define this function.  Return a memory object port (send
    right) for the file contents of NP.  PROT is the maximum allowable
@@ -542,11 +542,11 @@ mach_port_t diskfs_get_filemap (struct node *np, vm_prot_t prot);
 /* The user must define this function.  Return true if there are pager
    ports exported that might be in use by users.  If this returns false, then
    further pager creation is also blocked.  */
-int diskfs_pager_users ();
+int diskfs_pager_users (void);
 
 /* Return the bitwise or of the maximum prot parameter (the second arg to
    diskfs_get_filemap) for all active user pagers. */
-vm_prot_t diskfs_max_user_pager_prot ();
+vm_prot_t diskfs_max_user_pager_prot (void);
 
 /* The user must define this function.  Return a `struct pager *' suitable
    for use as an argument to diskfs_register_memory_fault_area that
@@ -565,7 +565,7 @@ void diskfs_readonly_changed (int readonly);
    It is always called with DISKFS_READONLY true.  diskfs_node_reload is
    subsequently called on all active nodes, so this call needn't re-read any
    node-specific data.  */
-error_t diskfs_reload_global_state ();
+error_t diskfs_reload_global_state (void);
 
 /* The user must define this function.  It must re-read all data specific to
    NODE from disk, without writing anything.  It is always called with
@@ -644,7 +644,7 @@ void diskfs_spawn_first_thread (ports_demuxer_type demuxer);
 /* Once diskfs_root_node is set, call this if we are a bootstrap
    filesystem.  If you call this, then the library will call
    diskfs_init_completed once it has a valid proc and auth port. */
-void diskfs_start_bootstrap ();
+void diskfs_start_bootstrap (void);
 
 /* Node NP now has no more references; clean all state.  NP must be
    locked.  */
@@ -694,8 +694,9 @@ void diskfs_nrele_light (struct node *np);
    read.  */
 error_t
 diskfs_node_rdwr (struct node *np, char *data, loff_t off,
-		  size_t amt, int dir, struct protid *cred,
-		  size_t *amtread);
+                  mach_msg_type_number_t amt, int dir,
+                  struct protid *cred,
+                  mach_msg_type_number_t *amtread);
 
 
 /* Send notifications to users who have requested them with
@@ -814,7 +815,7 @@ diskfs_disknode_node (struct disknode *disknode)
    This function is a wrapper for diskfs_lookup_hard.
 */
 error_t diskfs_lookup (struct node *dp,
-		       const char *name, enum lookup_type type,
+		       char *name, enum lookup_type type,
 		       struct node **np, struct dirstat *ds,
 		       struct protid *cred);
 
@@ -889,13 +890,13 @@ void diskfs_finish_protid (struct protid *cred, struct iouser *user);
 
 extern struct protid * diskfs_begin_using_protid_port (file_t port);
 extern struct protid *
-diskfs_begin_using_protid_payload (unsigned long payload);
+diskfs_begin_using_protid_payload (uintptr_t payload);
 extern struct diskfs_control * diskfs_begin_using_control_port (fsys_t port);
 extern struct diskfs_control *
-diskfs_begin_using_control_port_payload (unsigned long payload);
+diskfs_begin_using_control_port_payload (uintptr_t payload);
 extern struct bootinfo *diskfs_begin_using_bootinfo_port (exec_startup_t port);
 struct bootinfo *
-diskfs_begin_using_bootinfo_payload (unsigned long payload);
+diskfs_begin_using_bootinfo_payload (uintptr_t payload);
 
 extern void diskfs_end_using_protid_port (struct protid *cred);
 extern void diskfs_end_using_control_port (struct diskfs_control *cred);
@@ -913,7 +914,7 @@ diskfs_begin_using_protid_port (file_t port)
 }
 
 DISKFS_EXTERN_INLINE struct protid *
-diskfs_begin_using_protid_payload (unsigned long payload)
+diskfs_begin_using_protid_payload (uintptr_t payload)
 {
   return ports_lookup_payload (diskfs_port_bucket,
 			       payload,
@@ -928,7 +929,7 @@ diskfs_begin_using_control_port (fsys_t port)
 }
 
 DISKFS_EXTERN_INLINE struct diskfs_control *
-diskfs_begin_using_control_port_payload (unsigned long payload)
+diskfs_begin_using_control_port_payload (uintptr_t payload)
 {
   return ports_lookup_payload (diskfs_port_bucket,
 			       payload,
@@ -943,7 +944,7 @@ diskfs_begin_using_bootinfo_port (exec_startup_t port)
 }
 
 DISKFS_EXTERN_INLINE struct bootinfo *
-diskfs_begin_using_bootinfo_payload (unsigned long payload)
+diskfs_begin_using_bootinfo_payload (uintptr_t payload)
 {
   return ports_lookup_payload (diskfs_port_bucket,
 			       payload,
@@ -1067,7 +1068,7 @@ error_t diskfs_set_readonly (int readonly);
 /* Re-read all incore data structures from disk.  This will only work if
    DISKFS_READONLY is true.  DISKFS_FSYS_LOCK should be held while calling
    this routine.  */
-error_t diskfs_remount ();
+error_t diskfs_remount (void);
 
 /* Called by S_fsys_startup for execserver bootstrap.  The execserver
    is able to function without a real node, hence this fraud.  Arguments
@@ -1158,7 +1159,7 @@ struct store *diskfs_init_main (struct argp *startup_argp,
    underlying filesystem.  */
 
 /* Make errors go somewhere reasonable.  */
-void diskfs_console_stdio ();
+void diskfs_console_stdio (void);
 
 
 /* The following extracts from io_S.h and fs_S.h catch loff_t erroneously
@@ -1168,7 +1169,7 @@ void diskfs_console_stdio ();
 typedef struct protid *protid_t;
 
 kern_return_t diskfs_S_io_write (protid_t io_object,
-				 data_t data,
+				 const_data_t data,
 				 mach_msg_type_number_t dataCnt,
 				 loff_t offset,
 				 vm_size_t *amount);

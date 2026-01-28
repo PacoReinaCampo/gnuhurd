@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <inttypes.h>
 #include <error.h>
 #include <errno.h>
 #include <unistd.h>
@@ -143,7 +144,7 @@ int parse_args (int argc, char **argv, char **file_name,
 	      lock->l_start = tmp;
 	    }
 	  else
-	    error (1, EINVAL, "%s", str);
+	    error (1, EINVAL, "missing number");
 	  continue;
 	}
       if (strncmp (str, "l", 2) == 0)
@@ -160,7 +161,7 @@ int parse_args (int argc, char **argv, char **file_name,
 	      lock->l_len = tmp;
 	    }
 	  else
-	    error (1, EINVAL, "%s", str);
+	    error (1, EINVAL, "missing number");
 	  continue;
 	}
       if (strncmp (str, "st", 2) == 0)
@@ -177,7 +178,7 @@ int parse_args (int argc, char **argv, char **file_name,
 	      *sleep_time = tmp;
 	    }
 	  else
-	    error (1, EINVAL, "%s", str);
+	    error (1, EINVAL, "missing number");
 	  continue;
 	}
       error (1, EINVAL, "%s", str);
@@ -232,7 +233,7 @@ int main (int argc, char **argv)
   printf ("cmd = %s\n ", cmdc);
   printf("lock = {l_type,  l_whence, l_start, l_len, l_pid} =\n");
 #ifdef __GNU__
-  printf ("        {%s, %s, %lld,       %lld,     %d}\n",
+  printf ("        {%s, %s, %" PRIi64 ",       %" PRIi64 ",     %d}\n",
 #else
   printf ("        {%s, %s, %ld,       %ld,     %d}\n",
 #endif

@@ -1,3 +1,5 @@
+/* MIG type translation information */
+
 #define SHUTDOWN_INTRAN                                           \
   trivfs_protid_t trivfs_begin_using_protid (shutdown_t)
 #define SHUTDOWN_INTRAN_PAYLOAD                                   \

@@ -535,7 +535,7 @@ struct ps_getter
 
     /* A function that will get the value; the protocol between this function
        and its caller is type-dependent.  */
-    void (*fn) ();
+    void *fn;
   };
 
 /* Access macros: */
@@ -603,18 +603,19 @@ void ps_stream_free (struct ps_stream *stream);
    length of STRING, then write all of it; if MAX_LEN == -1, then write all
    of STRING regardless).  */
 error_t ps_stream_write (struct ps_stream *stream,
-			 const char *string, int max_len);
+			 const char *string, ssize_t max_len);
 
 /* Write NUM spaces to STREAM.  NUM may be negative, in which case the same
    number of adjacent spaces (written by other calls to ps_stream_space) are
    consumed if possible.  If an error occurs, the error code is returned,
    otherwise 0.  */
-error_t ps_stream_space (struct ps_stream *stream, int num);
+error_t ps_stream_space (struct ps_stream *stream, ssize_t num);
 
 /* Write as many spaces to STREAM as required to make a field of width SOFAR
    be at least WIDTH characters wide (the absolute value of WIDTH is used).
    If an error occurs, the error code is returned, otherwise 0.  */
-error_t ps_stream_pad (struct ps_stream *stream, int sofar, int width);
+error_t ps_stream_pad (struct ps_stream *stream,
+		       ssize_t sofar, ssize_t width);
 
 /* Write a newline to STREAM, resetting its position to zero.  */
 error_t ps_stream_newline (struct ps_stream *stream);
@@ -987,15 +988,17 @@ error_t proc_stat_list_filter1 (struct proc_stat_list *pp,
 error_t proc_stat_list_filter (struct proc_stat_list *pp,
 			       const struct ps_filter *filter, int invert);
 
+typedef int (*proc_stat_cmp_fun)(struct proc_stat *ps1,
+				    struct proc_stat *ps2,
+				    const struct ps_getter *getter);
+
 /* Destructively sort proc_stats in PP by ascending value of the field
    returned by GETTER, and compared by CMP_FN; If REVERSE is true, use the
    opposite order.  If a fatal error occurs, the error code is returned, it
    returns 0.  */
 error_t proc_stat_list_sort1 (struct proc_stat_list *pp,
 			      const struct ps_getter *getter,
-			      int (*cmp_fn)(struct proc_stat *ps1,
-					    struct proc_stat *ps2,
-					    const struct ps_getter *getter),
+			      proc_stat_cmp_fun cmp_fn,
 			      int reverse);
 
 /* Destructively sort proc_stats in PP by ascending value of the field KEY;
@@ -1044,7 +1047,7 @@ int proc_stat_list_spec_nominal (struct proc_stat_list *pp,
    information on the data types these routines return.  */
 
 /* Return the current host port.  */
-mach_port_t ps_get_host ();
+mach_port_t ps_get_host (void);
 
 /* Return a pointer to basic info about the current host in HOST_INFO.  Since
    this is static global information we just use a static buffer.  If a
@@ -1061,5 +1064,41 @@ error_t ps_host_sched_info (host_sched_info_t *host_info);
    to keep old load info, they should copy the buffer we return a pointer
    to).  If a system error occurs, the error code is returned, otherwise 0.  */
 error_t ps_host_load_info (host_load_info_t *host_info);
+
+error_t ps_emit_string (struct proc_stat *ps, struct ps_fmt_field *field,
+		struct ps_stream *stream);
+
+/* Returns 1 if string from GETTER is empty or -. */
+int ps_nominal_string (struct proc_stat *ps, const struct ps_getter *getter);
+
+/* Emits user name from FIELD into STREAM. */
+error_t
+ps_emit_user_name (struct proc_stat *ps, struct ps_fmt_field *field,
+		   struct ps_stream *stream);
+
+/* Emits time from FIELD into STREAM. */
+error_t
+ps_emit_past_time (struct proc_stat *ps, struct ps_fmt_field *field,
+		   struct ps_stream *stream);
+
+/* Emits minutes from FIELD into STREAM. */
+error_t
+ps_emit_minutes (struct proc_stat *ps, struct ps_fmt_field *field,
+		 struct ps_stream *stream);
+
+/* Emits minutes from FIELD into STREAM. */
+int
+ps_cmp_times (struct proc_stat *ps1, struct proc_stat *ps2,
+	      const struct ps_getter *getter);
+
+/* Compares the times between PS1 and PS2 using GETTER. */
+int
+ps_cmp_strings (struct proc_stat *ps1, struct proc_stat *ps2,
+		const struct ps_getter *getter);
+
+/* Compares user names of PS1 and PS2 using GETTER. */
+int
+ps_cmp_unames (struct proc_stat *ps1, struct proc_stat *ps2,
+	       const struct ps_getter *getter);
 
 #endif /* __PS_H__ */

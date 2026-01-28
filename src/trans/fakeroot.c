@@ -280,13 +280,13 @@ netfs_check_open_permissions (struct iouser *user, struct node *np,
 			  flags & (O_RDWR|O_EXEC), MACH_PORT_NULL);
 }
 
-error_t
+kern_return_t
 netfs_S_dir_lookup (struct protid *diruser,
-		    char *filename,
+		    const_string_t filename,
 		    int flags,
 		    mode_t mode,
 		    retry_type *do_retry,
-		    char *retry_name,
+		    string_t retry_name,
 		    mach_port_t *retry_port,
 		    mach_msg_type_name_t *retry_port_type)
 {
@@ -351,7 +351,7 @@ netfs_S_dir_lookup (struct protid *diruser,
 	    {
 	      char buf[1024];	/* XXX */
 	      char *trans = buf;
-	      size_t translen = sizeof buf;
+	      mach_msg_type_number_t translen = sizeof buf;
 	      err = file_get_translator (file,
 					 &trans, &translen);
 	      if (!err
@@ -517,7 +517,7 @@ netfs_S_dir_lookup (struct protid *diruser,
    CRED. */
 error_t
 netfs_set_translator (struct iouser *cred, struct node *np,
-		      char *argz, size_t argzlen)
+		      const char *argz, mach_msg_type_number_t argzlen)
 {
   return file_set_translator (netfs_node_netnode (np)->file,
 			      FS_TRANS_EXCL|FS_TRANS_SET,
@@ -530,7 +530,7 @@ netfs_set_translator (struct iouser *cred, struct node *np,
    which we do not use.  But the shared library requires us to define them.  */
 error_t
 netfs_attempt_lookup (struct iouser *user, struct node *dir,
-		      char *name, struct node **np)
+		      const char *name, struct node **np)
 {
   assert_backtrace (! "should not be here");
   return EIEIO;
@@ -538,7 +538,7 @@ netfs_attempt_lookup (struct iouser *user, struct node *dir,
 
 error_t
 netfs_attempt_create_file (struct iouser *user, struct node *dir,
-			   char *name, mode_t mode, struct node **np)
+			   const char *name, mode_t mode, struct node **np)
 {
   assert_backtrace (! "should not be here");
   return EIEIO;
@@ -640,7 +640,7 @@ netfs_attempt_chmod (struct iouser *cred, struct node *np, mode_t mode)
 /* The user must define this function.  Attempt to turn locked node NP
    (user CRED) into a symlink with target NAME.  */
 error_t
-netfs_attempt_mksymlink (struct iouser *cred, struct node *np, char *name)
+netfs_attempt_mksymlink (struct iouser *cred, struct node *np, const char *name)
 {
   int namelen = strlen (name) + 1;
   char trans[sizeof _HURD_SYMLINK + namelen];
@@ -755,7 +755,7 @@ netfs_attempt_syncfs (struct iouser *cred, int wait)
 
 error_t
 netfs_attempt_mkdir (struct iouser *user, struct node *dir,
-		     char *name, mode_t mode)
+		     const char *name, mode_t mode)
 {
   return dir_mkdir (netfs_node_netnode (dir)->file, name, mode | S_IRWXU);
 }
@@ -767,15 +767,15 @@ netfs_attempt_mkdir (struct iouser *user, struct node *dir,
  */
 
 error_t
-netfs_attempt_unlink (struct iouser *user, struct node *dir, char *name)
+netfs_attempt_unlink (struct iouser *user, struct node *dir, const char *name)
 {
   return dir_unlink (netfs_node_netnode (dir)->file, name);
 }
 
 error_t
 netfs_attempt_rename (struct iouser *user, struct node *fromdir,
-		      char *fromname, struct node *todir,
-		      char *toname, int excl)
+		      const char *fromname, struct node *todir,
+		      const char *toname, int excl)
 {
   return dir_rename (netfs_node_netnode (fromdir)->file, fromname,
 		     netfs_node_netnode (todir)->file, toname, excl);
@@ -783,14 +783,14 @@ netfs_attempt_rename (struct iouser *user, struct node *fromdir,
 
 error_t
 netfs_attempt_rmdir (struct iouser *user,
-		     struct node *dir, char *name)
+		     struct node *dir, const char *name)
 {
   return dir_rmdir (netfs_node_netnode (dir)->file, name);
 }
 
 error_t
 netfs_attempt_link (struct iouser *user, struct node *dir,
-		    struct node *file, char *name, int excl)
+		    struct node *file, const char *name, int excl)
 {
   return dir_link (netfs_node_netnode (dir)->file, netfs_node_netnode (file)->file, name, excl);
 }
@@ -824,7 +824,7 @@ netfs_attempt_readlink (struct iouser *user, struct node *np, char *buf)
 {
   char transbuf[sizeof _HURD_SYMLINK + np->nn_stat.st_size + 1];
   char *trans = transbuf;
-  size_t translen = sizeof transbuf;
+  mach_msg_type_number_t translen = sizeof transbuf;
   error_t err = file_get_translator (netfs_node_netnode (np)->file,
 				     &trans, &translen);
   if (err == 0)
@@ -849,8 +849,10 @@ netfs_attempt_read (struct iouser *cred, struct node *np,
 		    off_t offset, size_t *len, void *data)
 {
   char *buf = data;
+  mach_msg_type_number_t size = *len;
   error_t err = io_read (netfs_node_netnode (np)->file,
-			 &buf, len, offset, *len);
+			 &buf, &size, offset, size);
+  *len = size;
   if (err == 0 && buf != data)
     {
       memcpy (data, buf, *len);
@@ -861,7 +863,7 @@ netfs_attempt_read (struct iouser *cred, struct node *np,
 
 error_t
 netfs_attempt_write (struct iouser *cred, struct node *np,
-		     off_t offset, size_t *len, void *data)
+		     off_t offset, size_t *len, const void *data)
 {
   return io_write (netfs_node_netnode (np)->file, data, *len, offset, len);
 }
@@ -907,22 +909,22 @@ kern_return_t
 netfs_S_file_exec_paths (struct protid *user,
 			 task_t task,
 			 int flags,
-			 char *path,
-			 char *abspath,
-			 char *argv,
-			 size_t argvlen,
-			 char *envp,
-			 size_t envplen,
-			 mach_port_t *fds,
-			 size_t fdslen,
-			 mach_port_t *portarray,
-			 size_t portarraylen,
-			 int *intarray,
-			 size_t intarraylen,
-			 mach_port_t *deallocnames,
-			 size_t deallocnameslen,
-			 mach_port_t *destroynames,
-			 size_t destroynameslen)
+			 const_string_t path,
+			 const_string_t abspath,
+			 const char *argv,
+			 mach_msg_type_number_t argvlen,
+			 const char *envp,
+			 mach_msg_type_number_t envplen,
+			 const mach_port_t *fds,
+			 mach_msg_type_number_t fdslen,
+			 const mach_port_t *portarray,
+			 mach_msg_type_number_t portarraylen,
+			 const int *intarray,
+			 mach_msg_type_number_t intarraylen,
+			 const mach_port_t *deallocnames,
+			 mach_msg_type_number_t deallocnameslen,
+			 const mach_port_t *destroynames,
+			 mach_msg_type_number_t destroynameslen)
 {
   error_t err;
   file_t file;
@@ -941,6 +943,11 @@ netfs_S_file_exec_paths (struct protid *user,
 
   if (!err)
     {
+      /* Add a gratuitous send right on the protid to avoid a no-sender, and thus
+	 interrupt the exec, just because we are precisely replacing the calling
+	 process!  */
+      mach_port_t gratuitous = ports_get_send_right (user);
+
 #ifdef HAVE_FILE_EXEC_PATHS
       /* We cannot use MACH_MSG_TYPE_MOVE_SEND because we might need to
 	 retry an interrupted call that would have consumed the rights.  */
@@ -966,6 +973,7 @@ netfs_S_file_exec_paths (struct protid *user,
 			 destroynames, destroynameslen);
 
       mach_port_deallocate (mach_task_self (), file);
+      mach_port_deallocate (mach_task_self (), gratuitous);
     }
 
   if (err == 0)
@@ -977,6 +985,7 @@ netfs_S_file_exec_paths (struct protid *user,
       for (i = 0; i < portarraylen; ++i)
 	mach_port_deallocate (mach_task_self (), portarray[i]);
     }
+
   return err;
 }
 
@@ -984,20 +993,20 @@ kern_return_t
 netfs_S_file_exec (struct protid *user,
                    task_t task,
                    int flags,
-                   data_t argv,
-                   size_t argvlen,
-                   data_t envp,
-                   size_t envplen,
-                   mach_port_t *fds,
-                   size_t fdslen,
-                   mach_port_t *portarray,
-                   size_t portarraylen,
-                   int *intarray,
-                   size_t intarraylen,
-                   mach_port_t *deallocnames,
-                   size_t deallocnameslen,
-                   mach_port_t *destroynames,
-                   size_t destroynameslen)
+                   const_data_t argv,
+                   mach_msg_type_number_t argvlen,
+                   const_data_t envp,
+                   mach_msg_type_number_t envplen,
+                   const mach_port_t *fds,
+                   mach_msg_type_number_t fdslen,
+                   const mach_port_t *portarray,
+                   mach_msg_type_number_t portarraylen,
+                   const int *intarray,
+                   mach_msg_type_number_t intarraylen,
+                   const mach_port_t *deallocnames,
+                   mach_msg_type_number_t deallocnameslen,
+                   const mach_port_t *destroynames,
+                   mach_msg_type_number_t destroynameslen)
 {
   return netfs_S_file_exec_paths (user,
 				  task,
@@ -1013,7 +1022,7 @@ netfs_S_file_exec (struct protid *user,
 				  destroynames, destroynameslen);
 }
 
-error_t
+kern_return_t
 netfs_S_io_map (struct protid *user,
 		mach_port_t *rdobj, mach_msg_type_name_t *rdobjtype,
 		mach_port_t *wrobj, mach_msg_type_name_t *wrobjtype)
@@ -1030,7 +1039,7 @@ netfs_S_io_map (struct protid *user,
   return err;
 }
 
-error_t
+kern_return_t
 netfs_S_io_map_cntl (struct protid *user,
                      mach_port_t *obj,
                      mach_msg_type_name_t *objtype)
@@ -1047,7 +1056,7 @@ netfs_S_io_map_cntl (struct protid *user,
   return err;
 }
 
-error_t
+kern_return_t
 netfs_S_io_identity (struct protid *user,
 		     mach_port_t *id,
 		     mach_msg_type_name_t *idtype,
@@ -1070,7 +1079,7 @@ netfs_S_io_identity (struct protid *user,
 }
 
 #define NETFS_S_SIMPLE(name)			\
-error_t						\
+kern_return_t					\
 netfs_S_##name (struct protid *user)		\
 {						\
   error_t err;					\
@@ -1091,7 +1100,7 @@ NETFS_S_SIMPLE (io_readnotify)
 NETFS_S_SIMPLE (io_readsleep)
 NETFS_S_SIMPLE (io_sigio)
 
-error_t
+kern_return_t
 netfs_S_io_prenotify (struct protid *user,
                       vm_offset_t start, vm_offset_t stop)
 {
@@ -1106,7 +1115,7 @@ netfs_S_io_prenotify (struct protid *user,
   return err;
 }
 
-error_t
+kern_return_t
 netfs_S_io_postnotify (struct protid *user,
                        vm_offset_t start, vm_offset_t stop)
 {

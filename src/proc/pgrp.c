@@ -180,14 +180,14 @@ kern_return_t
 S_proc_getsessionpids (struct proc *callerp,
 		       pid_t sid,
 		       pid_t **pids,
-		       size_t *npidsp)
+		       mach_msg_type_number_t *npidsp)
 {
-  int count;
+  size_t count;
   struct pgrp *pg;
   struct proc *p;
   struct session *s;
   pid_t *pp = *pids;
-  u_int npids = *npidsp;
+  size_t npids = *npidsp;
 
   /* No need to check CALLERP; we don't use it. */
 
@@ -240,7 +240,6 @@ S_proc_getsessionpids (struct proc *callerp,
       for (pg = s->s_pgrps; pg; pg = pg->pg_next)
 	for (p = pg->pg_plist; p; p = p->p_gnext)
 	  *pp++ = p->p_pid;
-      /* Set dealloc XXX */
     }
 
   *npidsp = count;
@@ -252,14 +251,14 @@ kern_return_t
 S_proc_getsessionpgids (struct proc *callerp,
 			pid_t sid,
 			pid_t **pgids,
-			size_t *npgidsp)
+			mach_msg_type_number_t *npgidsp)
 {
-  int count;
+  size_t count;
   struct proc *p;
   struct pgrp *pg;
   struct session *s;
   pid_t *pp = *pgids;
-  int npgids = *npgidsp;
+  size_t npgids = *npgidsp;
 
   /* No need to check CALLERP; we don't use it. */
 
@@ -308,7 +307,6 @@ S_proc_getsessionpgids (struct proc *callerp,
       pp = *pgids;
       for (pg = s->s_pgrps; pg; pg = pg->pg_next)
 	*pp++ = pg->pg_pgid;
-      /* Dealloc ? XXX */
     }
   *npgidsp = count;
   return 0;
@@ -319,7 +317,7 @@ kern_return_t
 S_proc_getpgrppids (struct proc *callerp,
 		    pid_t pgid,
 		    pid_t **pids,
-		    size_t *npidsp)
+		    mach_msg_type_number_t *npidsp)
 {
 
   struct proc *p;
@@ -380,7 +378,6 @@ S_proc_getpgrppids (struct proc *callerp,
       for (p = pg->pg_plist; p; p = p->p_gnext)
 	if (!p->p_important)
 	  *pp++ = p->p_pid;
-      /* Dealloc ? XXX */
     }
   *npidsp = count;
   return 0;
@@ -523,8 +520,8 @@ leave_pgrp (struct proc *p)
       if (dosignal)
 	for (ip = pg->pg_plist; ip; ip = ip->p_gnext)
 	  {
-	    send_signal (ip->p_msgport, SIGHUP, ip->p_task);
-	    send_signal (ip->p_msgport, SIGCONT, ip->p_task);
+	    send_signal (ip->p_msgport, SIGHUP, 0, ip->p_task);
+	    send_signal (ip->p_msgport, SIGCONT, 0, ip->p_task);
 	  }
     }
 }

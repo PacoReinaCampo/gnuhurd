@@ -25,12 +25,12 @@
 /* Implement file_set_translator as described in <hurd/fs.defs>. */
 kern_return_t
 diskfs_S_file_set_translator (struct protid *cred,
-			      int passive_flags,
-			      int active_flags,
-			      int killtrans_flags,
-			      data_t passive,
-			      size_t passivelen,
-			      fsys_t active)
+                              int passive_flags,
+                              int active_flags,
+                              int killtrans_flags,
+                              const_data_t passive,
+                              mach_msg_type_number_t passivelen,
+                              fsys_t active)
 {
   struct node *np;
   error_t err;
@@ -139,7 +139,7 @@ diskfs_S_file_set_translator (struct protid *cred,
 		  /* Find the device number from the arguments
 		     of the translator. */
 		  int major, minor;
-		  char *arg;
+		  const char *arg;
 
 		  arg = passive + strlen (passive) + 1;
 		  assert_backtrace (arg <= passive + passivelen);
@@ -185,7 +185,7 @@ diskfs_S_file_set_translator (struct protid *cred,
 
 	      if (newmode == S_IFLNK)
 		{
-		  char *arg = passive + strlen (passive) + 1;
+		  const char *arg = passive + strlen (passive) + 1;
 		  assert_backtrace (arg <= passive + passivelen);
 		  if (arg == passive + passivelen)
 		    {
@@ -198,7 +198,7 @@ diskfs_S_file_set_translator (struct protid *cred,
 		  if (!diskfs_create_symlink_hook || err == EINVAL)
 		    /* Store the argument in the file as the
 		       target of the link */
-		    err = diskfs_node_rdwr (np, arg, 0, strlen (arg),
+		    err = diskfs_node_rdwr (np, (char*) arg, 0, strlen (arg),
 					      1, cred, 0);
 		  if (err)
 		    {
@@ -223,7 +223,8 @@ diskfs_S_file_set_translator (struct protid *cred,
   pthread_mutex_unlock (&np->lock);
 
   if (! err && cred->po->path && active_flags & FS_TRANS_SET)
-    err = fshelp_set_active_translator (&cred->pi, cred->po->path, &np->transbox);
+    err = fshelp_set_active_translator (cred->pi.bucket->notify_port,
+                                        cred->po->path, &np->transbox);
 
   return err;
 }

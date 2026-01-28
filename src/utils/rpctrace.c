@@ -33,6 +33,7 @@
 #include <string.h>
 #include <version.h>
 #include <sys/wait.h>
+#include <sys/time.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -41,9 +42,14 @@
 
 #include "msgids.h"
 
+/* Should match MiG's desired_complex_alignof */
+#define MSG_ALIGNMENT __alignof__(uintptr_t)
+
 const char *argp_program_version = STANDARD_HURD_VERSION (rpctrace);
 
 static unsigned strsize = 80;
+
+static unsigned timestamps;
 
 static const struct argp_option options[] =
 {
@@ -52,6 +58,7 @@ static const struct argp_option options[] =
   {0, 'E', "var[=value]", 0,
    "Set/change (var=value) or remove (var) an environment variable among the "
    "ones inherited by the executed process."},
+  {0, 't', 0, 0, "Print timestamps"},
   {0}
 };
 
@@ -353,8 +360,10 @@ new_send_wrapper (struct receiver_info *receive, task_t task,
   assert_perror_backtrace (err);
 
   TRACED_INFO (info)->name = 0;
-  asprintf (&TRACED_INFO (info)->name, "  %lu<--%lu(pid%d)", 
-	    receive->forward, TRACED_INFO (info)->pi.port_right, task2pid (task));
+  err = asprintf (&TRACED_INFO (info)->name, "  %u<--%u(pid%d)",
+		  receive->forward, TRACED_INFO (info)->pi.port_right, task2pid (task));
+  if (err == -1)
+    assert_perror_backtrace (errno);
   TRACED_INFO (info)->type = MACH_MSG_TYPE_MOVE_SEND;
   info->task = task;
   info->receive_right = receive;
@@ -798,6 +807,20 @@ rewrite_right (mach_port_t *right, mach_msg_type_name_t *type,
   return 0;
 }
 
+static mach_port_name_t *
+get_port_ref (void *data, const boolean_t is_inline, const int i) {
+  if (is_inline)
+    {
+      mach_port_name_inlined_t *const inlined_port_names = data;
+      return &inlined_port_names[i].name;
+    }
+  else
+    {
+      mach_port_t *const portnames = data;
+      return &portnames[i];
+    }
+}
+
 static void
 print_contents (mach_msg_header_t *inp,
 		void *msg_buf_ptr, struct req_info *req)
@@ -807,14 +830,15 @@ print_contents (mach_msg_header_t *inp,
   int first = 1;
 
   /* Process the message data, wrapping ports and printing data.  */
-  while (msg_buf_ptr < (void *) inp + inp->msgh_size)
+  while ((char *) msg_buf_ptr < (char *) inp + inp->msgh_size)
     {
       mach_msg_type_t *const type = msg_buf_ptr;
-      mach_msg_type_long_t *const lt = (void *) type;
+      mach_msg_type_long_t *const lt = (mach_msg_type_long_t *) type;
       void *data;
       mach_msg_type_number_t nelt; /* Number of data items.  */
       mach_msg_type_size_t eltsize; /* Bytes per item.  */
       mach_msg_type_name_t name; /* MACH_MSG_TYPE_* code */
+      boolean_t is_inline = type->msgt_inline;
 
       if (!type->msgt_longform)
 	{
@@ -831,7 +855,7 @@ print_contents (mach_msg_header_t *inp,
 	  data = msg_buf_ptr = lt + 1;
 	}
 
-      if (!type->msgt_inline)
+      if (!is_inline)
 	{
 	  /* This datum is out-of-line, meaning the message actually
 	     contains a pointer to a vm_allocate'd region of data.  */
@@ -839,8 +863,7 @@ print_contents (mach_msg_header_t *inp,
 	  msg_buf_ptr += sizeof (void *);
 	}
       else
-	msg_buf_ptr += ((nelt * eltsize + sizeof(natural_t) - 1)
-			& ~(sizeof(natural_t) - 1));
+	msg_buf_ptr += ((nelt * eltsize + MSG_ALIGNMENT - 1) & ~(MSG_ALIGNMENT - 1));
 
       if (first)
 	first = 0;
@@ -855,35 +878,39 @@ print_contents (mach_msg_header_t *inp,
       if (MACH_MSG_TYPE_PORT_ANY_RIGHT (name))
 	{
 	  /* These are port rights.  Translate them into wrappers.  */
-	  mach_port_t *const portnames = data;
 	  mach_msg_type_number_t i;
-	  mach_msg_type_name_t newtypes[nelt];
+	  mach_msg_type_name_t newtypes[nelt ? : 1];
 	  int poly;
 
 	  assert_backtrace (inp->msgh_bits & MACH_MSGH_BITS_COMPLEX);
-	  assert_backtrace (eltsize == sizeof (mach_port_t));
+
+	  if (is_inline)
+	    assert_backtrace (eltsize == sizeof (mach_port_name_inlined_t));
+	  else
+	    assert_backtrace (eltsize == sizeof (mach_port_t));
 
 	  poly = 0;
 	  for (i = 0; i < nelt; ++i)
 	    {
 	      char *str;
+	      mach_port_name_t *port_name = get_port_ref (data, is_inline, i);
 
 	      newtypes[i] = name;
 
-	      str = rewrite_right (&portnames[i], &newtypes[i], req);
+	      str = rewrite_right (port_name, &newtypes[i], req);
 
 	      putc ((i == 0 && nelt > 1) ? '{' : ' ', ostream);
 
-	      if (portnames[i] == MACH_PORT_NULL)
+	      if (*port_name == MACH_PORT_NULL)
 		fprintf (ostream, "(null)");
-	      else if (portnames[i] == MACH_PORT_DEAD)
+	      else if (*port_name == MACH_PORT_DEAD)
 		fprintf (ostream, "(dead)");
 	      else
 		{
 		  if (str != 0)
 		    fprintf (ostream, "%s", str);
 		  else
-		    fprintf (ostream, "%3u", (unsigned int) portnames[i]);
+		    fprintf (ostream, "%3u", (unsigned int) *port_name);
 		}
 	      if (i > 0 && newtypes[i] != newtypes[0])
 		poly = 1;
@@ -898,39 +925,45 @@ print_contents (mach_msg_header_t *inp,
 		  /* Some of the new rights are MAKE_SEND_ONCE.
 		     Turn them all into MOVE_SEND_ONCE.  */
 		  for (i = 0; i < nelt; ++i)
-		    if (newtypes[i] == MACH_MSG_TYPE_MAKE_SEND_ONCE)
-		      {
-			err = mach_port_insert_right (mach_task_self (),
-						      portnames[i],
-						      portnames[i],
-						      newtypes[i]);
-			assert_perror_backtrace (err);
-		      }
-		    else
-		      assert_backtrace (newtypes[i] == MACH_MSG_TYPE_MOVE_SEND_ONCE);
+		    {
+		      mach_port_name_t *port_name = get_port_ref (data, is_inline, i);
+		      if (newtypes[i] == MACH_MSG_TYPE_MAKE_SEND_ONCE)
+			{
+			  err = mach_port_insert_right (mach_task_self (),
+							*port_name,
+							*port_name,
+							newtypes[i]);
+			  assert_perror_backtrace (err);
+			}
+		      else
+			assert_backtrace (newtypes[i] == MACH_MSG_TYPE_MOVE_SEND_ONCE);
+		    }
 		}
 	      else
 		{
 		  for (i = 0; i < nelt; ++i)
-		    switch (newtypes[i])
+		    {
+		      mach_port_name_t *port_name = get_port_ref (data, is_inline, i);
+		      switch (newtypes[i])
 		      {
-		      case MACH_MSG_TYPE_COPY_SEND:
-			err = mach_port_mod_refs (mach_task_self (),
-						  portnames[i],
-						  MACH_PORT_RIGHT_SEND, +1);
-			assert_perror_backtrace (err);
-			break;
-		      case MACH_MSG_TYPE_MAKE_SEND:
-			err = mach_port_insert_right (mach_task_self (),
-						      portnames[i],
-						      portnames[i],
-						      newtypes[i]);
-			assert_perror_backtrace (err);
-			break;
-		      default:
-			assert_backtrace (newtypes[i] == MACH_MSG_TYPE_MOVE_SEND);
-			break;
+			case MACH_MSG_TYPE_COPY_SEND:
+			  err = mach_port_mod_refs (mach_task_self (),
+						    *port_name,
+						    MACH_PORT_RIGHT_SEND, +1);
+			  assert_perror_backtrace (err);
+			  break;
+			case MACH_MSG_TYPE_MAKE_SEND:
+			  err = mach_port_insert_right (mach_task_self (),
+						    *port_name,
+						    *port_name,
+						    newtypes[i]);
+			  assert_perror_backtrace (err);
+			  break;
+			default:
+			  assert_backtrace (newtypes[i] == MACH_MSG_TYPE_MOVE_SEND);
+			  break;
 		      }
+		    }
 
 		  name = MACH_MSG_TYPE_MOVE_SEND;
 		}
@@ -959,7 +992,7 @@ wrap_all_threads (task_t task)
   struct sender_info *thread_send_wrapper;
   struct receiver_info *thread_receiver_info;
   thread_t *threads;
-  size_t nthreads;
+  mach_msg_type_number_t nthreads;
   error_t err;
 
   err = task_threads (task, &threads, &nthreads);
@@ -978,8 +1011,10 @@ wrap_all_threads (task_t task)
 	  thread_send_wrapper = new_send_wrapper (thread_receiver_info,
 						  task, &new_thread_port);
 	  free (TRACED_INFO (thread_send_wrapper)->name);
-	  asprintf (&TRACED_INFO (thread_send_wrapper)->name,
-		    "thread%lu(pid%d)", threads[i], task2pid (task));
+	  err = asprintf (&TRACED_INFO (thread_send_wrapper)->name,
+			  "thread%u(pid%d)", threads[i], task2pid (task));
+	  if (err == -1)
+	    error (2, errno, "asprintf");
 
 	  err = mach_port_insert_right (mach_task_self (),
 					new_thread_port, new_thread_port,
@@ -1031,8 +1066,10 @@ wrap_new_thread (mach_msg_header_t *inp, struct req_info *req)
   mach_port_deallocate (mach_task_self (), reply->child_thread);
 
   free (TRACED_INFO (send_wrapper)->name);
-  asprintf (&TRACED_INFO (send_wrapper)->name, "thread%lu(pid%d)",
-	    thread_port, task2pid (req->from));
+  err = asprintf (&TRACED_INFO (send_wrapper)->name, "thread%u(pid%d)",
+		  thread_port, task2pid (req->from));
+  if (err == -1)
+    error (2, errno, "asprintf");
   ports_port_deref (send_wrapper);
 }
 
@@ -1078,11 +1115,15 @@ wrap_new_task (mach_msg_header_t *inp, struct req_info *req)
 
   pid = task2pid (task_port);
   free (TRACED_INFO (task_wrapper1)->name);
-  asprintf (&TRACED_INFO (task_wrapper1)->name, "task%lu(pid%d)",
-	    task_port, task2pid (req->from));
+  err = asprintf (&TRACED_INFO (task_wrapper1)->name, "task%u(pid%d)",
+		  task_port, task2pid (req->from));
+  if (err == -1)
+    error (2, errno, "asprintf");
   free (TRACED_INFO (task_wrapper2)->name);
-  asprintf (&TRACED_INFO (task_wrapper2)->name, "task%lu(pid%d)",
-	    task_port, pid);
+  err = asprintf (&TRACED_INFO (task_wrapper2)->name, "task%u(pid%d)",
+		  task_port, pid);
+  if (err == -1)
+    error (2, errno, "asprintf");
   ports_port_deref (task_wrapper1);
 }
 
@@ -1103,13 +1144,13 @@ trace_and_forward (mach_msg_header_t *inp, mach_msg_header_t *outp)
 
   const mach_msg_type_t RetCodeType =
   {
-    MACH_MSG_TYPE_INTEGER_32,	/* msgt_name = */
-    32,				/* msgt_size = */
-    1,				/* msgt_number = */
-    TRUE,			/* msgt_inline = */
-    FALSE,			/* msgt_longform = */
-    FALSE,			/* msgt_deallocate = */
-    0				/* msgt_unused = */
+    .msgt_name = MACH_MSG_TYPE_INTEGER_32,
+    .msgt_size = 32,
+    .msgt_number = 1,
+    .msgt_inline = TRUE,
+    .msgt_longform = FALSE,
+    .msgt_deallocate = FALSE,
+    .msgt_unused = 0
   };
 
   error_t err;
@@ -1132,7 +1173,7 @@ trace_and_forward (mach_msg_header_t *inp, mach_msg_header_t *outp)
 	    MACH_MSGH_BITS_REMOTE (inp->msgh_bits),
 	    is_notification (inp)? MACH_MSG_TYPE_MOVE_SEND_ONCE: info->type)
 	    | MACH_MSGH_BITS_OTHER (inp->msgh_bits);
-	  inp->msgh_local_port = ports_payload_get_name ((unsigned int) info);
+	  inp->msgh_local_port = ports_payload_get_name ((uintptr_t) info);
 	}
     }
   else
@@ -1226,13 +1267,14 @@ trace_and_forward (mach_msg_header_t *inp, mach_msg_header_t *outp)
 	    if (TRACED_INFO (info)->name == 0)
 	      {
 		if (msgid == 0)
-		  asprintf (&TRACED_INFO (info)->name, "reply(%u:%u)",
+		  err = asprintf (&TRACED_INFO (info)->name, "reply(%u:%u)",
 			    (unsigned int) TRACED_INFO (info)->pi.port_right,
 			    (unsigned int) inp->msgh_id);
 		else
-		  asprintf (&TRACED_INFO (info)->name, "reply(%u:%s)",
+		  err = asprintf (&TRACED_INFO (info)->name, "reply(%u:%s)",
 			    (unsigned int) TRACED_INFO (info)->pi.port_right,
 			    msgid->name);
+		assert_backtrace (err != -1);
 	      }
 	    break;
 
@@ -1431,6 +1473,38 @@ static void
 print_request_header (struct sender_info *receiver, mach_msg_header_t *msg)
 {
   const char *msgname = msgid_name (msg->msgh_id);
+
+  if (timestamps > 0)
+    {
+      char timestamp[32] = "";
+      struct timeval tv;
+
+      gettimeofday (&tv, NULL);
+
+      if (timestamps < 3)
+	{
+	  time_t t = tv.tv_sec;
+	  struct tm tm;
+
+	  localtime_r (&t, &tm);
+
+	  if (timestamps == 1)
+	    snprintf (timestamp, sizeof (timestamp),
+		      "%02d:%02d:%02d",
+		      tm.tm_hour, tm.tm_min, tm.tm_sec);
+	  else /* (timestamps == 2) */
+	    snprintf (timestamp, sizeof (timestamp),
+		      "%02d:%02d:%02d.%06lld",
+		      tm.tm_hour, tm.tm_min, tm.tm_sec, (long long) tv.tv_usec);
+	}
+      else /* (timestamps >= 3) */
+	snprintf (timestamp, sizeof (timestamp),
+		  "%lld.%06lld",
+		  (long long) tv.tv_sec, (long long) tv.tv_usec);
+
+      fprintf (ostream, "%s ", timestamp);
+    }
+
   print_ellipsis ();
   last_reply_port = msg->msgh_local_port;
 
@@ -1536,7 +1610,7 @@ print_data (mach_msg_type_name_t type,
 	  /* We encountered a non-printable character.  Print anything
 	     that has not been printed so far.  */
 	  if (p < q)
-	    fprintf (ostream, "%.*s", q - p, p);
+	    fprintf (ostream, "%.*s", (int) (q - p), p);
 
 	  char c = escape_sequences[*((const unsigned char *) q)];
 	  if (c)
@@ -1550,7 +1624,7 @@ print_data (mach_msg_type_name_t type,
 
       /* Print anything that has not been printed so far.  */
       if (p < q)
-	fprintf (ostream, "%.*s", q - p, p);
+	fprintf (ostream, "%.*s", (int) (q - p), p);
       fprintf (ostream, "\"");
       return;
 
@@ -1648,7 +1722,9 @@ traced_spawn (char **argv, char **envp)
   ti = new_send_wrapper (receive_ti, traced_task, &task_wrapper);
   ti->task = traced_task;
   free (TRACED_INFO (ti)->name);
-  asprintf (&TRACED_INFO (ti)->name, "task%lu(pid%d)", traced_task, pid);
+  err = asprintf (&TRACED_INFO (ti)->name, "task%u(pid%d)", traced_task, pid);
+  if (err == -1)
+    error (2, errno, "asprintf");
 
   /* Replace the task's kernel port with the wrapper.  When this task calls
      `mach_task_self ()', it will get our wrapper send right instead of its
@@ -1729,6 +1805,10 @@ main (int argc, char **argv, char **envp)
 	      if (envz_add (&envz, &envz_len, name, newval))
 		error (1, errno, "envz_add");
 	    }
+	  break;
+
+	case 't':
+	  timestamps++;
 	  break;
 
 	case ARGP_KEY_NO_ARGS:

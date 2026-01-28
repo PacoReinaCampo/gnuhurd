@@ -149,8 +149,8 @@ trivfs_S_io_read(struct trivfs_protid *cred,
 		 mach_port_t reply, mach_msg_type_name_t replytype,
 		 data_t *data,
 		 mach_msg_type_number_t *datalen,
-		 loff_t offs,
-		 mach_msg_type_number_t amt)
+		 off_t offs,
+		 vm_size_t amt)
 {
   if (!cred)
     return EOPNOTSUPP;
@@ -169,7 +169,7 @@ trivfs_S_io_read(struct trivfs_protid *cred,
 kern_return_t
 trivfs_S_io_readable (struct trivfs_protid *cred,
 		      mach_port_t reply, mach_msg_type_name_t replytype,
-		      mach_msg_type_number_t *amount)
+		      vm_size_t *amount)
 {
   if (!cred)
     return EOPNOTSUPP;
@@ -227,8 +227,8 @@ trivfs_S_io_select_timeout (struct trivfs_protid *cred,
 kern_return_t
 trivfs_S_io_write (struct trivfs_protid *cred,
 		   mach_port_t reply, mach_msg_type_name_t replytype,
-		   data_t data, mach_msg_type_number_t datalen,
-		   loff_t offs, mach_msg_type_number_t *amt)
+		   const_data_t data, mach_msg_type_number_t datalen,
+		   off_t offs, vm_size_t *amt)
 {
   if (!cred)
     return EOPNOTSUPP;
@@ -269,7 +269,7 @@ trivfs_S_io_get_openmodes (struct trivfs_protid *cred,
     }
 }
 
-error_t
+kern_return_t
 trivfs_S_io_set_all_openmodes(struct trivfs_protid *cred,
 			      mach_port_t reply,
 			      mach_msg_type_name_t replytype,

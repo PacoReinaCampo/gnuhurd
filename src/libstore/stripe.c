@@ -57,6 +57,24 @@ stripe_write (struct store *store,
     store_write (stripe, addr_adj (addr, store, stripe), buf, len, amount);
 }
 
+static error_t
+stripe_sync (struct store *store)
+{
+  size_t i;
+  error_t err = 0;
+
+  for (i = 0; i < store->num_children; i++)
+    {
+      error_t e = store_sync (store->children[i]);
+      /* If any child fails, we record the error but continue
+	syncing the others to maximize data safety. */
+      if (e)
+	err = e;
+    }
+
+  return err;
+}
+
 error_t
 stripe_set_size (struct store *store, size_t newsize)
 {
@@ -111,9 +129,18 @@ ileave_decode (struct store_enc *enc, const struct store_class *const *classes,
 const struct store_class
 store_ileave_class =
 {
-  STORAGE_INTERLEAVE, "interleave", stripe_read, stripe_write, stripe_set_size,
-  ileave_allocate_encoding, ileave_encode, ileave_decode,
-  store_set_child_flags, store_clear_child_flags, 0, 0, stripe_remap
+  .id = STORAGE_INTERLEAVE,
+  .name = "interleave",
+  .read = stripe_read,
+  .write = stripe_write,
+  .set_size = stripe_set_size,
+  .allocate_encoding = ileave_allocate_encoding,
+  .encode = ileave_encode,
+  .decode = ileave_decode,
+  .set_flags = store_set_child_flags,
+  .clear_flags = store_clear_child_flags,
+  .remap = stripe_remap,
+  .sync = stripe_sync,
 };
 STORE_STD_CLASS (ileave);
 

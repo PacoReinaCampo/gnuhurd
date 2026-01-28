@@ -31,9 +31,10 @@
 #include <mach/gnumach.h>
 #include <mach/vm_statistics.h>
 #include <mach/vm_cache_statistics.h>
-#include <mach/default_pager.h>
 #include <hurd.h>
 #include <hurd/paths.h>
+
+#include "default_pager_U.h"
 
 const char *argp_program_version = STANDARD_HURD_VERSION (vmstat);
 
@@ -228,8 +229,8 @@ static val_t
 get_size (struct vm_state *state, const struct field *field)
 {
   return
-    (state->vmstats.free_count + state->vmstats.active_count
-     + state->vmstats.inactive_count + state->vmstats.wire_count)
+    ((val_t) (state->vmstats.free_count + state->vmstats.active_count
+     + state->vmstats.inactive_count + state->vmstats.wire_count))
     * state->vmstats.pagesize;
 }
 

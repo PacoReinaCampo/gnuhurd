@@ -34,15 +34,15 @@
 #include <mach/notify.h>
 #include <sys/mman.h>
 
-error_t
+kern_return_t
 S_io_write (struct sock_user *user,
-	    data_t data,
-	    size_t datalen,
+	    const_data_t data,
+	    mach_msg_type_number_t datalen,
 	    off_t offset,
-	    mach_msg_type_number_t *amount)
+	    vm_size_t *amount)
 {
   error_t err;
-  struct iovec iov = { data, datalen };
+  struct iovec iov = { (void*) data, datalen };
   struct msghdr m = { msg_name: 0, msg_namelen: 0, msg_flags: 0,
 		      msg_controllen: 0, msg_iov: &iov, msg_iovlen: 1 };
 
@@ -67,12 +67,12 @@ S_io_write (struct sock_user *user,
   return err;
 }
 
-error_t
+kern_return_t
 S_io_read (struct sock_user *user,
 	   data_t *data,
-	   size_t *datalen,
+	   mach_msg_type_number_t *datalen,
 	   off_t offset,
-	   mach_msg_type_number_t amount)
+	   vm_size_t amount)
 {
   error_t err;
   int alloced = 0;
@@ -124,7 +124,7 @@ S_io_read (struct sock_user *user,
   return err;
 }
 
-error_t
+kern_return_t
 S_io_seek (struct sock_user *user,
 	   off_t offset,
 	   int whence,
@@ -133,12 +133,13 @@ S_io_seek (struct sock_user *user,
   return user ? ESPIPE : EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_io_readable (struct sock_user *user,
-	       mach_msg_type_number_t *amount)
+	       vm_size_t *out_amount)
 {
   struct sock *sk;
   error_t err;
+  mach_msg_type_number_t amount = 0;
 
   if (!user)
     return EOPNOTSUPP;
@@ -160,7 +161,8 @@ S_io_readable (struct sock_user *user,
     {
     case SOCK_STREAM:
     case SOCK_SEQPACKET:
-      err = tcp_tiocinq (sk, amount);
+      err = tcp_tiocinq (sk, &amount);
+      *out_amount = amount;
       break;
 
     case SOCK_DGRAM:
@@ -169,7 +171,7 @@ S_io_readable (struct sock_user *user,
 	err = EINVAL;
       else
 	/* Boy, I really love the C language. */
-	*amount = (skb_peek (&sk->receive_queue)
+	*out_amount = (skb_peek (&sk->receive_queue)
 		   ? : &((struct sk_buff){}))->len;
       break;
 
@@ -183,7 +185,7 @@ S_io_readable (struct sock_user *user,
   return err;
 }
 
-error_t
+kern_return_t
 S_io_set_all_openmodes (struct sock_user *user,
 			int bits)
 {
@@ -199,7 +201,7 @@ S_io_set_all_openmodes (struct sock_user *user,
   return 0;
 }
 
-error_t
+kern_return_t
 S_io_get_openmodes (struct sock_user *user,
 		    int *bits)
 {
@@ -223,7 +225,7 @@ S_io_get_openmodes (struct sock_user *user,
   return 0;
 }
 
-error_t
+kern_return_t
 S_io_set_some_openmodes (struct sock_user *user,
 			 int bits)
 {
@@ -237,7 +239,7 @@ S_io_set_some_openmodes (struct sock_user *user,
   return 0;
 }
 
-error_t
+kern_return_t
 S_io_clear_some_openmodes (struct sock_user *user,
 			   int bits)
 {
@@ -313,7 +315,7 @@ io_select_common (struct sock_user *user,
   return ret;
 }
 
-error_t
+kern_return_t
 S_io_select (struct sock_user *user,
 	     mach_port_t reply,
 	     mach_msg_type_name_t reply_type,
@@ -322,7 +324,7 @@ S_io_select (struct sock_user *user,
   return io_select_common (user, reply, reply_type, NULL, select_type);
 }
 
-error_t
+kern_return_t
 S_io_select_timeout (struct sock_user *user,
 		     mach_port_t reply,
 		     mach_msg_type_name_t reply_type,
@@ -332,7 +334,7 @@ S_io_select_timeout (struct sock_user *user,
   return io_select_common (user, reply, reply_type, &ts, select_type);
 }
 
-error_t
+kern_return_t
 S_io_stat (struct sock_user *user,
 	   struct stat *st)
 {
@@ -351,14 +353,14 @@ S_io_stat (struct sock_user *user,
   return 0;
 }
 
-error_t
+kern_return_t
 S_io_reauthenticate (struct sock_user *user,
 		     mach_port_t rend)
 {
   struct sock_user *newuser;
   uid_t gubuf[20], ggbuf[20], aubuf[20], agbuf[20];
   uid_t *gen_uids, *gen_gids, *aux_uids, *aux_gids;
-  size_t genuidlen, gengidlen, auxuidlen, auxgidlen;
+  mach_msg_type_number_t genuidlen, gengidlen, auxuidlen, auxgidlen;
   error_t err;
   size_t i, j;
   auth_t auth;
@@ -435,12 +437,12 @@ S_io_reauthenticate (struct sock_user *user,
   return 0;
 }
 
-error_t
+kern_return_t
 S_io_restrict_auth (struct sock_user *user,
 		    mach_port_t *newobject,
 		    mach_msg_type_name_t *newobject_type,
-		    uid_t *uids, size_t uidslen,
-		    uid_t *gids, size_t gidslen)
+		    const uid_t *uids, mach_msg_type_number_t uidslen,
+		    const uid_t *gids, mach_msg_type_number_t gidslen)
 {
   struct sock_user *newuser;
   int i, j;
@@ -472,7 +474,7 @@ S_io_restrict_auth (struct sock_user *user,
   return 0;
 }
 
-error_t
+kern_return_t
 S_io_duplicate (struct sock_user *user,
 		mach_port_t *newobject,
 		mach_msg_type_name_t *newobject_type)
@@ -490,7 +492,7 @@ S_io_duplicate (struct sock_user *user,
   return 0;
 }
 
-error_t
+kern_return_t
 S_io_identity (struct sock_user *user,
 	       mach_port_t *id,
 	       mach_msg_type_name_t *idtype,
@@ -525,7 +527,7 @@ S_io_identity (struct sock_user *user,
   return 0;
 }
 
-error_t
+kern_return_t
 S_io_revoke (struct sock_user *user)
 {
   /* XXX maybe we should try */
@@ -534,7 +536,7 @@ S_io_revoke (struct sock_user *user)
 
 
 
-error_t
+kern_return_t
 S_io_async (struct sock_user *user,
 	    mach_port_t notify,
 	    mach_port_t *id,
@@ -543,21 +545,21 @@ S_io_async (struct sock_user *user,
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_io_mod_owner (struct sock_user *user,
 		pid_t owner)
 {
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_io_get_owner (struct sock_user *user,
 		pid_t *owner)
 {
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_io_get_icky_async_id (struct sock_user *user,
 			mach_port_t *id,
 			mach_msg_type_name_t *idtype)
@@ -565,9 +567,9 @@ S_io_get_icky_async_id (struct sock_user *user,
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_io_server_version (struct sock_user *user,
-		     char *name,
+		     string_t name,
 		     int *major,
 		     int *minor,
 		     int *edit)
@@ -575,7 +577,7 @@ S_io_server_version (struct sock_user *user,
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_io_pathconf (struct sock_user *user,
 	       int name,
 	       int *value)
@@ -585,7 +587,7 @@ S_io_pathconf (struct sock_user *user,
 
 
 
-error_t
+kern_return_t
 S_io_map (struct sock_user *user,
 	  mach_port_t *rdobj,
 	  mach_msg_type_name_t *rdobj_type,
@@ -595,7 +597,7 @@ S_io_map (struct sock_user *user,
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_io_map_cntl (struct sock_user *user,
 	       mach_port_t *obj,
 	       mach_msg_type_name_t *obj_type)
@@ -603,25 +605,25 @@ S_io_map_cntl (struct sock_user *user,
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_io_get_conch (struct sock_user *user)
 {
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_io_release_conch (struct sock_user *user)
 {
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_io_eofnotify (struct sock_user *user)
 {
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_io_prenotify (struct sock_user *user,
 		vm_offset_t start,
 		vm_offset_t end)
@@ -629,7 +631,7 @@ S_io_prenotify (struct sock_user *user,
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_io_postnotify (struct sock_user *user,
 		 vm_offset_t start,
 		 vm_offset_t end)
@@ -637,19 +639,19 @@ S_io_postnotify (struct sock_user *user,
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_io_readnotify (struct sock_user *user)
 {
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_io_readsleep (struct sock_user *user)
 {
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_io_sigio (struct sock_user *user)
 {
   return EOPNOTSUPP;

@@ -20,6 +20,9 @@
 #include <mach/mig_errors.h>
 #include <pthread.h>
 #include <string.h>
+#include <sys/resource.h>
+#include <errno.h>
+#include <stdio.h>
 
 #include "priv.h"
 #include "memory_object_S.h"
@@ -41,7 +44,7 @@
 
   At least one worker thread is necessary.
 */
-#define WORKER_COUNT 1
+#define WORKER_COUNT 10
 
 /* An request contains the message received from the port set.  */
 struct request
@@ -138,14 +141,14 @@ mig_reply_setup (
 	mach_msg_header_t	*out)
 {
       static const mach_msg_type_t RetCodeType = {
-		/* msgt_name = */		MACH_MSG_TYPE_INTEGER_32,
-		/* msgt_size = */		32,
-		/* msgt_number = */		1,
-		/* msgt_inline = */		TRUE,
-		/* msgt_longform = */		FALSE,
-		/* msgt_deallocate = */		FALSE,
-		/* msgt_unused = */		0
-	};
+        .msgt_name = MACH_MSG_TYPE_INTEGER_32,
+        .msgt_size = 32,
+        .msgt_number = 1,
+        .msgt_inline = TRUE,
+        .msgt_longform = FALSE,
+        .msgt_deallocate = FALSE,
+        .msgt_unused = 0
+      };
 
 #define	InP	(in)
 #define	OutP	((mig_reply_header_t *) out)
@@ -292,6 +295,8 @@ service_paging_requests (void *arg)
 {
   struct pager_requests *requests = arg;
 
+  pthread_setname_np (pthread_self (), "paging_requests");
+
   int demuxer (mach_msg_header_t *inp,
 	       mach_msg_header_t *outp)
   {
@@ -314,8 +319,13 @@ pager_start_workers (struct port_bucket *pager_bucket,
   int i;
   pthread_t t;
   struct pager_requests *requests;
+  struct rlimit limits = { RLIM_INFINITY, RLIM_INFINITY };
 
   assert_backtrace (out_requests != NULL);
+
+  /* Lift default address space limits if we are allowed */
+  if (setrlimit (RLIMIT_AS, &limits) == -1 && errno != EPERM)
+    perror ("error lifting address space limits");
 
   requests = malloc (sizeof *requests);
   if (requests == NULL)
@@ -361,7 +371,10 @@ pager_start_workers (struct port_bucket *pager_bucket,
 
 done:
   if (err)
-    *out_requests = NULL;
+    {
+      free (requests);
+      *out_requests = NULL;
+    }
   else
     *out_requests = requests;
 

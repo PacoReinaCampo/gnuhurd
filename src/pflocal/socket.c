@@ -28,7 +28,7 @@
 #include "socket_S.h"
 
 /* Connect two sockets */
-error_t
+kern_return_t
 S_socket_connect2 (struct sock_user *user1, struct sock_user *user2)
 {
   error_t err;
@@ -61,7 +61,7 @@ ensure_connq (struct sock *sock)
 }
 
 /* Prepare a socket of appropriate type for future accept operations.  */
-error_t
+kern_return_t
 S_socket_listen (struct sock_user *user, int queue_limit)
 {
   error_t err;
@@ -75,7 +75,7 @@ S_socket_listen (struct sock_user *user, int queue_limit)
   return err;
 }
 
-error_t
+kern_return_t
 S_socket_connect (struct sock_user *user, struct addr *addr)
 {
   error_t err;
@@ -171,7 +171,7 @@ S_socket_connect (struct sock_user *user, struct addr *addr)
 }
 
 /* Return a new connection from a socket previously listened.  */
-error_t
+kern_return_t
 S_socket_accept (struct sock_user *user,
 		 mach_port_t *port, mach_msg_type_name_t *port_type,
 		 mach_port_t *peer_addr_port,
@@ -222,7 +222,7 @@ S_socket_accept (struct sock_user *user,
 }
 
 /* Bind a socket to an address.  */
-error_t
+kern_return_t
 S_socket_bind (struct sock_user *user, struct addr *addr)
 {
   if (! addr)
@@ -239,7 +239,7 @@ S_socket_bind (struct sock_user *user, struct addr *addr)
 }
 
 /* Shutdown a socket for reading or writing.  */
-error_t
+kern_return_t
 S_socket_shutdown (struct sock_user *user, int what)
 {
   if (! user)
@@ -251,7 +251,7 @@ S_socket_shutdown (struct sock_user *user, int what)
 }
 
 /* Find out the name of a socket.  */
-error_t
+kern_return_t
 S_socket_name (struct sock_user *user,
 	       mach_port_t *addr_port, mach_msg_type_name_t *addr_port_type)
 {
@@ -273,7 +273,7 @@ S_socket_name (struct sock_user *user,
 }
 
 /* Find out the name of the socket's peer.  */
-error_t
+kern_return_t
 S_socket_peername (struct sock_user *user,
 		   mach_port_t *addr_port,
 		   mach_msg_type_name_t *addr_port_type)
@@ -285,12 +285,12 @@ S_socket_peername (struct sock_user *user,
 }
 
 /* Send data over a socket, possibly including Mach ports.  */
-error_t
+kern_return_t
 S_socket_send (struct sock_user *user, struct addr *dest_addr, int flags,
-	       data_t data, size_t data_len,
-	       mach_port_t *ports, size_t num_ports,
-	       data_t control, size_t control_len,
-	       size_t *amount)
+	       const_data_t data, mach_msg_type_number_t data_len,
+	       const mach_port_t *ports, mach_msg_type_number_t num_ports,
+	       const_data_t control, mach_msg_type_number_t control_len,
+	       vm_size_t *amount)
 {
   error_t err = 0;
   int noblock;
@@ -342,7 +342,7 @@ S_socket_send (struct sock_user *user, struct addr *dest_addr, int flags,
       else
 	/* No address, must be a connected socket...  */
 	err = sock_acquire_write_pipe (sock, &pipe);
-	
+
       if (!err)
 	{
 	  noblock = (user->sock->flags & PFLOCAL_SOCK_NONBLOCK)
@@ -374,15 +374,15 @@ S_socket_send (struct sock_user *user, struct addr *dest_addr, int flags,
 }
 
 /* Receive data from a socket, possibly including Mach ports.  */
-error_t
+kern_return_t
 S_socket_recv (struct sock_user *user,
 	       mach_port_t *addr, mach_msg_type_name_t *addr_type,
 	       int in_flags,
-	       data_t *data, size_t *data_len,
+	       data_t *data, mach_msg_type_name_t *data_len,
 	       mach_port_t **ports, mach_msg_type_name_t *ports_type,
-	       size_t *num_ports,
-	       data_t *control, size_t *control_len,
-	       int *out_flags, size_t amount)
+	       mach_msg_type_name_t *num_ports,
+	       data_t *control, mach_msg_type_name_t *control_len,
+	       int *out_flags, vm_size_t amount)
 {
   error_t err;
   unsigned flags;
@@ -404,6 +404,7 @@ S_socket_recv (struct sock_user *user,
   if (err == EPIPE)
     /* EOF */
     {
+      err = 0;
       *data_len = 0;
       if (num_ports)
 	*num_ports = 0;
@@ -412,12 +413,21 @@ S_socket_recv (struct sock_user *user,
     }
   else if (!err)
     {
+      size_t data_size = *data_len;
+      size_t control_size = *control_len;
+      size_t ports_size = *num_ports;
       noblock = (user->sock->flags & PFLOCAL_SOCK_NONBLOCK)
 		|| (in_flags & MSG_DONTWAIT);
       err =
-	pipe_recv (pipe, noblock, &flags, &source_addr, data, data_len,
-		   amount, control, control_len, ports, num_ports);
+	pipe_recv (pipe, noblock, &flags, &source_addr, data, &data_size,
+		   amount, control, &control_size, ports, &ports_size);
       pipe_release_reader (pipe);
+      if (!err)
+	{
+	  *data_len = data_size;
+	  *control_len = control_size;
+	  *num_ports = ports_size;
+	}
     }
 
   if (!err)
@@ -439,10 +449,11 @@ S_socket_recv (struct sock_user *user,
   return err;
 }
 
-error_t
+kern_return_t
 S_socket_getopt (struct sock_user *user,
 		 int level, int opt,
-		 data_t *value, size_t *value_len)
+		 data_t *value,
+		 mach_msg_type_name_t *value_len)
 {
   int ret = 0;
   struct pipe *pipe;
@@ -529,9 +540,10 @@ S_socket_getopt (struct sock_user *user,
   return ret;
 }
 
-error_t
+kern_return_t
 S_socket_setopt (struct sock_user *user,
-		 int level, int opt, data_t value, size_t value_len)
+		 int level, int opt, const_data_t value,
+		 mach_msg_type_name_t value_len)
 {
   int ret = 0;
   struct pipe *pipe;

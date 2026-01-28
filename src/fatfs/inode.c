@@ -409,7 +409,7 @@ diskfs_node_reload (struct node *node)
 
 /* Write all active disknodes into the ext2_inode pager. */
 void
-write_all_disknodes ()
+write_all_disknodes (void)
 {
   error_t write_one_disknode (struct node *node)
     {
@@ -426,7 +426,7 @@ write_all_disknodes ()
 
 
 void
-refresh_node_stats ()
+refresh_node_stats (void)
 {
   error_t refresh_one_node_stat (struct node *node)
     {
@@ -471,7 +471,7 @@ diskfs_set_statfs (struct statfs *st)
 
 error_t
 diskfs_set_translator (struct node *node,
-		       const char *name, u_int namelen,
+		       const char *name, mach_msg_type_number_t namelen,
 		       struct protid *cred)
 {
   assert_backtrace (!diskfs_readonly);
@@ -479,13 +479,13 @@ diskfs_set_translator (struct node *node,
 }
 
 error_t
-diskfs_get_translator (struct node *node, char **namep, u_int *namelen)
+diskfs_get_translator (struct node *node, char **namep, mach_msg_type_number_t *namelen)
 {
   assert_backtrace (0);
 }
 
 void
-diskfs_shutdown_soft_ports ()
+diskfs_shutdown_soft_ports (void)
 {
     /* Should initiate termination of internally held pager ports
      (the only things that should be soft) XXX */
@@ -533,8 +533,8 @@ diskfs_truncate (struct node *node, loff_t length)
     {
       fat_truncate_node(node, round_cluster(length) >> log2_bytes_per_cluster);
       node->allocsize = round_cluster(length);
+      diskfs_end_catch_exception ();
     }
-  diskfs_end_catch_exception ();
 
   node->dn_set_mtime = 1;
   node->dn_set_ctime = 1;
@@ -545,7 +545,7 @@ diskfs_truncate (struct node *node, loff_t length)
   return err;
 }
 
-error_t
+kern_return_t
 diskfs_S_file_get_storage_info (struct protid *cred,
 				mach_port_t **ports,
 				mach_msg_type_name_t *ports_type,

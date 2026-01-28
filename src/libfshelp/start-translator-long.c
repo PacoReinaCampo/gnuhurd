@@ -39,7 +39,7 @@ struct fsys_startup_request
   mach_msg_type_t flagsType;
   int flags;
   mach_msg_type_t control_portType;
-  mach_port_t control_port;
+  mach_port_name_inlined_t control_port;
 };
 
 struct fsys_startup_reply
@@ -48,7 +48,7 @@ struct fsys_startup_reply
   mach_msg_type_t RetCodeType;
   kern_return_t RetCode;
   mach_msg_type_t realnodeType;
-  mach_port_t realnode;
+  mach_port_name_inlined_t realnode;
 };
 
 /* Wait around for an fsys_startup message on the port PORT from the
@@ -65,43 +65,43 @@ service_fsys_startup (fshelp_open_fn_t underlying_open_fn, void *cookie,
   /* These should be optimized away to pure integer constants.  */
   const mach_msg_type_t flagsCheck =
     {
-      MACH_MSG_TYPE_INTEGER_32,	/* msgt_name = */
-      32,			/* msgt_size = */
-      1,			/* msgt_number = */
-      TRUE,			/* msgt_inline = */
-      FALSE,			/* msgt_longform = */
-      FALSE,			/* msgt_deallocate = */
-      0				/* msgt_unused = */
+      .msgt_name = MACH_MSG_TYPE_INTEGER_32,
+      .msgt_size = 32,
+      .msgt_number = 1,
+      .msgt_inline = TRUE,
+      .msgt_longform = FALSE,
+      .msgt_deallocate = FALSE,
+      .msgt_unused = 0
     };
   const mach_msg_type_t control_portCheck =
     {
-      MACH_MSG_TYPE_PORT_SEND,	/* msgt_name = */
-      32,			/* msgt_size = */
-      1,			/* msgt_number = */
-      TRUE,			/* msgt_inline = */
-      FALSE,			/* msgt_longform = */
-      FALSE,			/* msgt_deallocate = */
-      0				/* msgt_unused = */
+      .msgt_name = MACH_MSG_TYPE_PORT_SEND,
+      .msgt_size = 8 * sizeof(mach_port_name_inlined_t),
+      .msgt_number = 1,
+      .msgt_inline = TRUE,
+      .msgt_longform = FALSE,
+      .msgt_deallocate = FALSE,
+      .msgt_unused = 0
     };
   const mach_msg_type_t RetCodeType =
     {
-      MACH_MSG_TYPE_INTEGER_32,	/* msgt_name = */
-      32,			/* msgt_size = */
-      1,			/* msgt_number = */
-      TRUE,			/* msgt_inline = */
-      FALSE,			/* msgt_longform = */
-      FALSE,			/* msgt_deallocate = */
-      0				/* msgt_unused = */
+      .msgt_name = MACH_MSG_TYPE_INTEGER_32,
+      .msgt_size = 32,
+      .msgt_number = 1,
+      .msgt_inline = TRUE,
+      .msgt_longform = FALSE,
+      .msgt_deallocate = FALSE,
+      .msgt_unused = 0
     };
   const mach_msg_type_t realnodeType =
     {
-      -1,			/* msgt_name = */
-      32,			/* msgt_size = */
-      1,			/* msgt_number = */
-      TRUE,			/* msgt_inline = */
-      FALSE,			/* msgt_longform = */
-      FALSE,			/* msgt_deallocate = */
-      0				/* msgt_unused = */
+      .msgt_name = (unsigned char) MACH_MSG_TYPE_POLYMORPHIC,
+      .msgt_size = 8 * sizeof(mach_port_name_inlined_t),
+      .msgt_number = 1,
+      .msgt_inline = TRUE,
+      .msgt_longform = FALSE,
+      .msgt_deallocate = FALSE,
+      .msgt_unused = 0
     };
 
   /* Return true iff TYPE fails to match CHECK.  */
@@ -110,7 +110,7 @@ service_fsys_startup (fshelp_open_fn_t underlying_open_fn, void *cookie,
     {
       union
       {
-        uint32_t word;
+        uintptr_t word;
 	mach_msg_type_t type;
       } t, c;
       t.type = *type;
@@ -157,17 +157,17 @@ service_fsys_startup (fshelp_open_fn_t underlying_open_fn, void *cookie,
     {
       mach_msg_type_name_t realnode_type;
 
-      *control = request.startup.control_port;
+      *control = request.startup.control_port.name;
 
       reply.RetCode =
 	(*underlying_open_fn) (request.startup.flags,
-			       &reply.realnode, &realnode_type, task,
+			       &reply.realnode.name, &realnode_type, task,
 			       cookie);
 
       reply.realnodeType = realnodeType;
       reply.realnodeType.msgt_name = realnode_type;
 
-      if (!reply.RetCode && reply.realnode != MACH_PORT_NULL)
+      if (!reply.RetCode && reply.realnode.name != MACH_PORT_NULL)
 	/* The message can't be simple because of the port.  */
 	reply.head.msgh_bits |= MACH_MSGH_BITS_COMPLEX;
     }
@@ -180,7 +180,7 @@ service_fsys_startup (fshelp_open_fn_t underlying_open_fn, void *cookie,
       && reply.realnodeType.msgt_name == MACH_MSG_TYPE_MOVE_SEND)
     /* For MACH_SEND_INTERRUPTED, we'll have pseudo-received the message
        and might have to clean up a generated send right.  */
-    mach_port_deallocate (mach_task_self (), reply.realnode);
+    mach_port_deallocate (mach_task_self (), reply.realnode.name);
 
   if (reply.RetCode)
     /* Make our error return be the earlier one.  */
@@ -192,31 +192,49 @@ service_fsys_startup (fshelp_open_fn_t underlying_open_fn, void *cookie,
 
 error_t
 fshelp_start_translator_long (fshelp_open_fn_t underlying_open_fn,
-			      void *cookie, char *name, char *argz,
-			      int argz_len, mach_port_t *fds,
-			      mach_msg_type_name_t fds_type, int fds_len,
-			      mach_port_t *ports,
-			      mach_msg_type_name_t ports_type, int ports_len,
-			      int *ints, int ints_len,
-			      uid_t owner_uid,
-			      int timeout, fsys_t *control)
+                              void *cookie, char *name, char *argz,
+                              mach_msg_type_number_t argz_len,
+                              mach_port_t *fds,
+                              mach_msg_type_name_t fds_type,
+                              mach_msg_type_number_t fds_len,
+                              mach_port_t *ports,
+                              mach_msg_type_name_t ports_type,
+                              mach_msg_type_number_t ports_len,
+                              int *ints,
+                              mach_msg_type_number_t ints_len,
+                              uid_t owner_uid,
+                              int timeout, fsys_t *control)
 {
   error_t err;
   file_t executable;
   mach_port_t bootstrap = MACH_PORT_NULL;
   mach_port_t task = MACH_PORT_NULL;
-  mach_port_t prev_notify, proc, saveport, childproc;
-  int ports_moved = 0;
+  mach_port_t prev_notify, proc, saveport;
+  int deallocate_proc;
+
+  /* While from our function signature it appears that we support passing
+     incomplete port arrays of any type, this is what the implementation
+     actually requires.  */
+  assert_backtrace (ports_len > INIT_PORT_BOOTSTRAP);
+  assert_backtrace (ports_type == MACH_MSG_TYPE_COPY_SEND);
+  assert_backtrace (fds_type == MACH_MSG_TYPE_COPY_SEND);
 
   /* Find the translator itself.  Since argz has zero-separated elements, we
      can use it as a normal string representing the first element.  */
-  executable = file_name_lookup(name, O_EXEC, 0);
+  executable = file_name_lookup (name, O_EXEC, 0);
   if (executable == MACH_PORT_NULL)
     return errno;
 
   /* Create a bootstrap port for the translator.  */
-  err =
-    mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &bootstrap);
+  err = mach_port_allocate (mach_task_self (),
+                            MACH_PORT_RIGHT_RECEIVE,
+                            &bootstrap);
+  if (err)
+    goto lose;
+
+  err = mach_port_insert_right (mach_task_self (),
+                                bootstrap, bootstrap,
+                                MACH_MSG_TYPE_MAKE_SEND);
   if (err)
     goto lose;
 
@@ -232,44 +250,73 @@ fshelp_start_translator_long (fshelp_open_fn_t underlying_open_fn,
   /* XXX 25 is BASEPRI_USER, which isn't exported by the kernel.  Ideally,
      nice values should be used, perhaps with a simple wrapper to convert
      them to Mach priorities.  */
-  err = task_priority(task, 25, FALSE);
+  err = task_priority (task, 25, FALSE);
 
   if (err)
     goto lose_task;
 
-  /* Designate TASK as our child and set it's owner accordingly. */
-  proc = getproc ();
-  proc_child (proc, task);
-  err = proc_task2proc (proc, task, &childproc);
-  mach_port_deallocate (mach_task_self (), proc);
-  if (err)
-    goto lose_task;
-  err = proc_setowner (childproc, owner_uid, owner_uid == (uid_t) -1);
-  mach_port_deallocate (mach_task_self (), childproc);
-  if (err)
-    goto lose_task;
-
-  assert_backtrace (ports_len > INIT_PORT_BOOTSTRAP);
-  switch (ports_type)
+  /* Designate TASK as our child, fill in its proc port, and set its owner
+     accordingly.  */
+  if (ports[INIT_PORT_PROC] == MACH_PORT_NULL)
     {
-    case MACH_MSG_TYPE_MAKE_SEND:
-    case MACH_MSG_TYPE_MAKE_SEND_ONCE:
-      break;
+      proc = getproc ();
+      deallocate_proc = 1;
+    }
+  else
+    {
+      proc = ports[INIT_PORT_PROC];
+      deallocate_proc = 0;
+    }
 
-    case MACH_MSG_TYPE_MOVE_SEND:
-      if (ports[INIT_PORT_BOOTSTRAP] != MACH_PORT_NULL)
-	mach_port_deallocate (mach_task_self (), ports[INIT_PORT_BOOTSTRAP]);
-      mach_port_insert_right (mach_task_self (), bootstrap, bootstrap,
-			      MACH_MSG_TYPE_MAKE_SEND);
-      break;
+  proc_child (proc, task);
+  err = proc_task2proc (proc, task, &ports[INIT_PORT_PROC]);
+  if (!err)
+    {
+      /* Try proc_setowner () for compatibility with
+         older proc server.  */
+      err = proc_setowner (ports[INIT_PORT_PROC],
+                           owner_uid,
+                           owner_uid == (uid_t) -1);
+      if (err == EOPNOTSUPP)
+        err = 0;
+    }
+  if (deallocate_proc)
+    mach_port_deallocate (mach_task_self (), proc);
+  if (err)
+    goto lose_task;
 
-    case MACH_MSG_TYPE_COPY_SEND:
-      mach_port_insert_right (mach_task_self (), bootstrap, bootstrap,
-			      MACH_MSG_TYPE_MAKE_SEND);
-      break;
+  /* If we have been passed an auth port, and it's different from our own,
+     reauthenticate the child proc.  */
+  if (MACH_PORT_VALID (ports[INIT_PORT_AUTH])
+      && HURD_PORT_USE (&_hurd_ports[INIT_PORT_AUTH],
+                        port != ports[INIT_PORT_AUTH]))
+    {
+      mach_port_t rend, newport = MACH_PORT_NULL;
 
-    default:
-      abort ();
+      rend = mach_reply_port ();
+      err = proc_reauthenticate (ports[INIT_PORT_PROC],
+                                 rend, MACH_MSG_TYPE_MAKE_SEND);
+
+      if (!err)
+        err = auth_user_authenticate (ports[INIT_PORT_AUTH],
+                                      rend, MACH_MSG_TYPE_MAKE_SEND,
+                                      &newport);
+
+      mach_port_mod_refs (mach_task_self (), rend,
+                          MACH_PORT_RIGHT_RECEIVE, -1);
+
+      if (err)
+        goto lose_task;
+
+      err = proc_reauthenticate_complete (newport);
+      if (err)
+        {
+          mach_port_deallocate (mach_task_self (), newport);
+          goto lose_task;
+        }
+
+      mach_port_deallocate (mach_task_self (), ports[INIT_PORT_PROC]);
+      ports[INIT_PORT_PROC] = newport;
     }
 
   saveport = ports[INIT_PORT_BOOTSTRAP];
@@ -291,51 +338,48 @@ fshelp_start_translator_long (fshelp_open_fn_t underlying_open_fn,
 		     ports, ports_type, ports_len,
 		     ints, ints_len, 0, 0, 0, 0);
 
-  ports_moved = 1;
-
-  if (ports_type == MACH_MSG_TYPE_COPY_SEND)
-    mach_port_deallocate (mach_task_self (), bootstrap);
+  mach_port_deallocate (mach_task_self (), bootstrap);
   ports[INIT_PORT_BOOTSTRAP] = saveport;
 
   if (err)
     goto lose_task;
 
-  /* Ask to be told if TASK dies.  */
-  err =
-    mach_port_request_notification(mach_task_self(),
-				   bootstrap, MACH_NOTIFY_NO_SENDERS, 0,
-				   bootstrap, MACH_MSG_TYPE_MAKE_SEND_ONCE,
-				   &prev_notify);
+  /* Ask to be told if TASK dies.  It is OK to use the same port here, since we
+     never give it out to anyone but the translator itself (and the file system,
+     and the exec server).  If the translator wants us to believe it has died,
+     so be it.  */
+  err = mach_port_request_notification (mach_task_self (),
+                                        bootstrap,
+                                        MACH_NOTIFY_NO_SENDERS,
+                                        0,
+                                        bootstrap,
+                                        MACH_MSG_TYPE_MAKE_SEND_ONCE,
+                                        &prev_notify);
   if (err)
     goto lose_task;
 
   /* Ok, cool, we've got a running(?) program, now rendezvous with it if
      possible using the startup protocol on the bootstrap port... */
-  err = service_fsys_startup(underlying_open_fn, cookie, bootstrap,
-			     timeout, control, task);
+  err = service_fsys_startup (underlying_open_fn,
+                              cookie, bootstrap,
+                              timeout, control, task);
 
  lose_task:
   if (err)
     task_terminate (task);
 
  lose:
-  if (!ports_moved)
-    {
-      int i;
-
-      if (fds_type == MACH_MSG_TYPE_MOVE_SEND)
-	for (i = 0; i < fds_len; i++)
-	  mach_port_deallocate (mach_task_self (), fds[i]);
-      if (ports_type == MACH_MSG_TYPE_MOVE_SEND)
-	for (i = 0; i < ports_len; i++)
-	  mach_port_deallocate (mach_task_self (), ports[i]);
-    }
   if (bootstrap != MACH_PORT_NULL)
-    mach_port_destroy(mach_task_self(), bootstrap);
+    mach_port_destroy (mach_task_self (), bootstrap);
   if (executable != MACH_PORT_NULL)
-    mach_port_deallocate(mach_task_self(), executable);
+    mach_port_deallocate (mach_task_self (), executable);
   if (task != MACH_PORT_NULL)
-    mach_port_deallocate(mach_task_self(), task);
+    mach_port_deallocate (mach_task_self (), task);
+  if (ports[INIT_PORT_PROC] != MACH_PORT_NULL)
+    {
+      mach_port_deallocate (mach_task_self (), ports[INIT_PORT_PROC]);
+      ports[INIT_PORT_PROC] = MACH_PORT_NULL;
+    }
 
   return err;
 }

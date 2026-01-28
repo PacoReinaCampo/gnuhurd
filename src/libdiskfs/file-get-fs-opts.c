@@ -25,9 +25,9 @@
 #include "priv.h"
 #include "fs_S.h"
 
-error_t
-diskfs_S_file_get_fs_options (struct protid *cred,
-			      data_t *data, size_t *data_len)
+kern_return_t
+diskfs_S_file_get_fs_options (struct protid *cred, data_t *data,
+                              mach_msg_type_number_t *data_len)
 {
   error_t err;
   char *argz = 0;

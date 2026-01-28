@@ -87,6 +87,14 @@ dev_buf_fill (struct dev *dev, off_t offs)
   if (err)
     return err;
 
+  if (buf_len < store->block_size)
+    {
+      /* Short read, translate this to EIO */
+      if (buf != dev->buf)
+	munmap (buf, buf_len);
+      return EIO;
+    }
+
   if (buf != dev->buf)
     {
       munmap (dev->buf, store->block_size);
@@ -261,7 +269,7 @@ buffered_rw (struct dev *dev, off_t offs, size_t len, size_t *amount,
     {
       if (len >= block_size)
 	{
-	  size_t amount;
+	  size_t amount = 0;
 	  err = dev_buf_discard (dev);
 	  if (! err)
 	    err =
@@ -334,7 +342,7 @@ dev_rw (struct dev *dev, off_t offs, size_t len, size_t *amount,
    AMOUNT.  If successful, 0 is returned, otherwise an error code is
    returned.  */
 error_t
-dev_write (struct dev *dev, off_t offs, void *buf, size_t len,
+dev_write (struct dev *dev, off_t offs, const void *buf, size_t len,
 	   size_t *amount)
 {
   error_t buf_write (size_t buf_offs, size_t io_offs, size_t len)
@@ -384,7 +392,7 @@ dev_read (struct dev *dev, off_t offs, size_t whole_amount,
 {
   error_t err;
   int allocated_buf = 0;
-  error_t ensure_buf ()
+  error_t ensure_buf (void)
     {
       if (*len < whole_amount)
 	{

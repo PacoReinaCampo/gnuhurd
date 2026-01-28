@@ -48,9 +48,11 @@ struct disk_image_user
     struct disk_image_user *next;
   };
 
-/* Return zero now.  Return a second time with a nonzero error_t
+/* Returns zero now.  Returns a second time with a nonzero error_t
    if this thread faults accessing `disk_image' before calling
-   `diskfs_end_catch_exception' (below).  */
+   `diskfs_end_catch_exception' (below), in which case
+   diskfs_end_catch_exception should not be called and the access should be
+   avoided.  */
 #define diskfs_catch_exception()					      \
 ({									      \
     struct disk_image_user *diu = alloca (sizeof *diu);			      \

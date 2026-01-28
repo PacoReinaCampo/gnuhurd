@@ -35,12 +35,15 @@ check_message_return (struct proc *p, void *availpaddr)
     }
 }
 
-/* Register ourselves with statup. */
+/* Register ourselves with startup. */
 static void *
-tickle_statup (void *statupport)
+tickle_startup (void *startupport)
 {
-  startup_essential_task ((mach_port_t) statupport, mach_task_self (),
-			  MACH_PORT_NULL, "proc", _hurd_host_priv);
+  pthread_setname_np (pthread_self (), "startup");
+
+  startup_essential_task ((mach_port_t) (uintptr_t) startupport,
+			  mach_task_self (), MACH_PORT_NULL,
+			  "proc", _hurd_host_priv);
   return NULL;
 }
 
@@ -69,7 +72,7 @@ S_proc_setmsgport (struct proc *p,
        the essential task RPC; spawn a thread to do it. */
       pthread_t thread;
       error_t err;
-      err = pthread_create (&thread, NULL, tickle_statup,
+      err = pthread_create (&thread, NULL, tickle_startup,
 			    (void*) (uintptr_t) msgport);
       if (!err)
 	pthread_detach (thread);
@@ -79,7 +82,7 @@ S_proc_setmsgport (struct proc *p,
 	  perror ("pthread_create");
 	}
     }
-      
+
   return 0;
 }
 
@@ -106,7 +109,7 @@ check_msgport_death (struct proc *p)
     {
       mach_port_type_t type;
       error_t err;
-      
+
       err = mach_port_type (mach_task_self (), p->p_msgport, &type);
       if (err || (type & MACH_PORT_TYPE_DEAD_NAME))
 	{

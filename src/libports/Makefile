@@ -30,13 +30,13 @@ SRCS = create-bucket.c create-class.c \
  resume-bucket-rpcs.c resume-all-rpcs.c interrupt-rpcs.c \
  init.c complete-deallocate.c get-right.c get-send-right.c \
  count-class.c count-bucket.c \
- enable-class.c enable-bucket.c bucket-iterate.c class-iterate.c stubs.c \
+ enable-class.c enable-bucket.c bucket-iterate.c class-iterate.c \
  notify-dead-name.c notify-no-senders.c notify-port-destroyed.c \
  notify-msg-accepted.c notify-port-deleted.c notify-send-once.c \
  interrupt-operation.c interrupt-on-notify.c interrupt-notified-rpcs.c \
  dead-name.c create-port.c import-port.c default-uninhibitable-rpcs.c \
  claim-right.c transfer-right.c create-port-noinstall.c create-internal.c \
- interrupted.c extern-inline.c port-deref-deferred.c
+ interrupted.c extern-inline.c port-deref-deferred.c request-notification.c
 
 installhdrs = ports.h port-deref-deferred.h
 

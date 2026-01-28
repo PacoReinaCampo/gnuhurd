@@ -21,6 +21,7 @@
 
 #include "priv.h"
 #include <stdlib.h>
+#include <pthread.h>
 #include <hurd/ports.h>
 
 static int thread_timeout = 1000 * 60 * 2; /* two minutes */
@@ -31,6 +32,8 @@ static void *
 master_thread_function (void *demuxer)
 {
   error_t err;
+
+  pthread_setname_np (pthread_self (), "diskfs");
 
   do
     {

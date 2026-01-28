@@ -21,12 +21,11 @@ makemode	= server
 PORTDIR = $(srcdir)/port
 
 SRCS		= main.c pci-ops.c netfs_impl.c \
-		  pcifs.c ncache.c options.c func_files.c startup.c \
-		  startup-ops.c
-MIGSRCS		= pciServer.c startup_notifyServer.c
-OBJS		= $(patsubst %.S,%.o,$(patsubst %.c,%.o, $(SRCS) $(MIGSRCS)))
+		  pcifs.c ncache.c options.c func_files.c \
+		  device_map.c pciServer.c startup_notifyServer.c
+OBJS		= $(SRCS:.c=.o) $(MIGSTUBS)
 
-HURDLIBS= fshelp ports shouldbeinlibc netfs iohelp ihash
+HURDLIBS= fshelp ports shouldbeinlibc netfs iohelp ihash trivfs machdev
 LDLIBS = -lpthread $(libpciaccess_LIBS)
 
 target = pci-arbiter

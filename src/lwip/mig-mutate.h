@@ -1,4 +1,5 @@
-/*
+/* MIG type translation information
+
    Copyright (C) 1995,2017 Free Software Foundation, Inc.
    Written by Michael I. Bushnell, p/BSG.
 
@@ -27,6 +28,7 @@
 #define IO_DESTRUCTOR end_using_socket_port (sock_user_t)
 #define IO_IMPORTS import "mig-decls.h";
 #define IIOCTL_IMPORTS import "mig-decls.h";
+#define RIOCTL_IMPORTS import "mig-decls.h";
 
 #define SOCKET_INTRAN sock_user_t begin_using_socket_port (socket_t)
 #define SOCKET_INTRAN_PAYLOAD sock_user_t begin_using_socket_payload

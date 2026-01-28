@@ -31,6 +31,8 @@
 #include <features.h>
 #include <hurd/hurd_types.h>
 
+extern int nperopens;
+
 #ifdef TERM_DEFINE_EI
 #define TERM_EI
 #else
@@ -43,6 +45,7 @@
 #undef FLUSHO
 #undef PENDIN
 #undef NOFLSH
+#include <unistd.h>
 #include <termios.h>
 
 #define CHAR_EOT '\004'		/* C-d */
@@ -371,7 +374,7 @@ void report_carrier_error (error_t);
 /* Other decls */
 error_t drop_output (void);
 void send_signal (int);
-error_t drain_output ();
+error_t drain_output (void);
 void output_character (int);
 void copy_rawq (void);
 void rescan_inputq (void);
@@ -383,10 +386,10 @@ extern dev_t rdev;
 
 /* kludge--these are pty versions of trivfs_S_io_* functions called by
    the real functions in users.c to do work for ptys.  */
-error_t pty_io_write (struct trivfs_protid *, char *,
-		      mach_msg_type_number_t, mach_msg_type_number_t *);
+error_t pty_io_write (struct trivfs_protid *, const char *,
+		      mach_msg_type_number_t, vm_size_t *);
 error_t pty_io_read (struct trivfs_protid *, char **,
-		     mach_msg_type_number_t *, mach_msg_type_number_t);
+		     mach_msg_type_number_t *, vm_size_t);
 error_t pty_io_readable (size_t *);
 error_t pty_io_select (struct trivfs_protid *, mach_port_t,
 		       struct timespec *, int *);

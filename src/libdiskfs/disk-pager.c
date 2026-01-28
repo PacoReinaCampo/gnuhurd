@@ -29,7 +29,6 @@ struct pager_requests *diskfs_disk_pager_requests;
 static void fault_handler (int sig, long int sigcode, struct sigcontext *scp);
 static struct hurd_signal_preemptor preemptor =
   {
-  signals: sigmask (SIGSEGV) | sigmask (SIGBUS),
   preemptor: NULL,
   handler: (sighandler_t) &fault_handler,
   };
@@ -73,6 +72,9 @@ diskfs_start_disk_pager (struct user_pager_info *upi,
   /* Set up the signal preemptor to catch faults on the disk image.  */
   preemptor.first = (vm_address_t) *image;
   preemptor.last = ((vm_address_t) *image + size);
+  sigemptyset (&preemptor.signals);
+  sigaddset (&preemptor.signals, SIGSEGV);
+  sigaddset (&preemptor.signals, SIGBUS);
   hurd_preempt_signals (&preemptor);
 
   /* We have the mapping; we no longer need the send right.  */
@@ -82,6 +84,7 @@ diskfs_start_disk_pager (struct user_pager_info *upi,
 static void
 fault_handler (int sig, long int sigcode, struct sigcontext *scp)
 {
+  jmp_buf *env;
   error_t err;
 
 #ifndef NDEBUG
@@ -100,8 +103,10 @@ fault_handler (int sig, long int sigcode, struct sigcontext *scp)
     }
 #endif
 
+  env = &diskfs_exception_diu->env;
+
   /* Clear the record, since the faulting thread will not.  */
-  diskfs_exception_diu = NULL;
+  diskfs_exception_diu = diskfs_exception_diu->next;
 
   /* Fetch the error code from the pager.  */
   assert_backtrace (scp->sc_error == EKERN_MEMORY_ERROR);
@@ -109,5 +114,5 @@ fault_handler (int sig, long int sigcode, struct sigcontext *scp)
   assert_backtrace (err);
 
   /* Make `diskfault_catch' return the error code.  */
-  longjmp (diskfs_exception_diu->env, err);
+  longjmp (*env, err);
 }

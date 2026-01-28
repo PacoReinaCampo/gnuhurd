@@ -89,16 +89,19 @@ alloc_file_system (struct pcifs ** fs)
 }
 
 error_t
-init_file_system (file_t underlying_node, struct pcifs * fs)
+init_root_node (file_t underlying_node)
 {
   error_t err;
   struct node *np;
-  io_statbuf_t underlying_node_stat;
+  io_statbuf_t underlying_node_stat = { 0 };
 
-  /* Initialize status from underlying node.  */
-  err = io_stat (underlying_node, &underlying_node_stat);
-  if (err)
-    return err;
+  if (underlying_node != MACH_PORT_NULL)
+    {
+      /* Initialize status from underlying node.  */
+      err = io_stat (underlying_node, &underlying_node_stat);
+      if (err)
+	return err;
+    }
 
   np = netfs_make_node_alloc (sizeof (struct netnode));
   if (!np)
@@ -114,19 +117,29 @@ init_file_system (file_t underlying_node, struct pcifs * fs)
   fshelp_touch (&np->nn_stat, TOUCH_ATIME | TOUCH_MTIME | TOUCH_CTIME,
 		pcifs_maptime);
 
+  netfs_root_node = np;
+  return 0;
+}
+
+error_t
+init_file_system (struct pcifs * fs)
+{
+  error_t err;
+  struct node *np = netfs_root_node;
+  
   fs->entries = calloc (1, sizeof (struct pcifs_dirent));
   if (!fs->entries)
-    {
-      return ENOMEM;
-    }
+    return ENOMEM;
 
   /* Create the root entry */
   err =
     create_dir_entry (-1, -1, -1, -1, -1, "", 0, np->nn_stat, np, 0,
 		      fs->entries);
+  if (err)
+    return err;
 
   fs->num_entries = 1;
-  fs->root = netfs_root_node = np;
+  fs->root = np;
   fs->root->nn->ln = fs->entries;
   pthread_mutex_init (&fs->node_cache_lock, 0);
   pthread_mutex_init (&fs->pci_conf_lock, 0);
@@ -210,6 +223,8 @@ create_fs_tree (struct pcifs * fs)
   domain_parent = bus_parent = dev_parent = func_parent = 0;
   iter = pci_slot_match_iterator_create(&match);
   device = pci_device_next(iter);
+
+  /* FIXME: set different st_ino values.  */
 
   for (i = 0; device != NULL; i++, device = pci_device_next(iter))
     {

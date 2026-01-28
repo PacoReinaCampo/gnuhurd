@@ -21,13 +21,13 @@
 #include "netfs.h"
 #include "io_S.h"
 
-error_t
+kern_return_t
 netfs_S_io_restrict_auth (struct protid *user,
 			  mach_port_t *newport,
 			  mach_msg_type_name_t *newporttype,
-			  uid_t *uids,
+			  const uid_t *uids,
 			  mach_msg_type_number_t nuids,
-			  gid_t *gids,
+			  const gid_t *gids,
 			  mach_msg_type_number_t ngids)
 {
   error_t err;
@@ -48,6 +48,7 @@ netfs_S_io_restrict_auth (struct protid *user,
     {
       *newport = ports_get_right (newpi);
       *newporttype = MACH_MSG_TYPE_MAKE_SEND;
+      ports_port_deref (newpi);
     }
   else
     {
@@ -56,6 +57,5 @@ netfs_S_io_restrict_auth (struct protid *user,
       err = ENOMEM;
     }
 
-  ports_port_deref (newpi);
   return err;
 }

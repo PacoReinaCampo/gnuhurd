@@ -91,9 +91,12 @@ diskfs_set_sync_interval (int interval)
    INTERVAL seconds, as long as it's in the thread pointed to by the global
    variable PERIODIC_SYNC_THREAD.   */
 static void *
-periodic_sync (void * arg)
+periodic_sync (void *arg)
 {
-  int interval = (int) arg;
+  int interval = (int)(uintptr_t) arg;
+
+  pthread_setname_np (pthread_self (), "sync");
+
   for (;;)
     {
       error_t err;

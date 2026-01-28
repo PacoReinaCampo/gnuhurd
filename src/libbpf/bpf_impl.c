@@ -66,7 +66,7 @@ bpf_do_filter(net_rcv_port_t infp, char *p,	unsigned int wirelen,
 	bpf_insn_t pc, pc_end;
 	unsigned int buflen;
 
-	unsigned long A, X;
+	unsigned int A, X;
 	int k;
 	unsigned int mem[BPF_MEMWORDS];
 
@@ -85,7 +85,8 @@ bpf_do_filter(net_rcv_port_t infp, char *p,	unsigned int wirelen,
 		switch (pc->code) {
 
 			default:
-				abort();
+				// Unknown instruction, abort
+				return 0;
 			case BPF_RET|BPF_K:
 				if (infp->rcv_port == MACH_PORT_NULL &&
 						*entpp == 0) {
@@ -114,9 +115,9 @@ bpf_do_filter(net_rcv_port_t infp, char *p,	unsigned int wirelen,
 				k = pc->k;
 
 load_word:
-				if ((u_int)k + sizeof(long) <= hlen)
+				if ((u_int)k + sizeof(int) <= hlen)
 					data = header;
-				else if ((u_int)k + sizeof(long) <= buflen) {
+				else if ((u_int)k + sizeof(int) <= buflen) {
 					k -= hlen;
 					data = p;
 				} else
@@ -127,7 +128,7 @@ load_word:
 					A = EXTRACT_LONG(&data[k]);
 				else
 #endif
-					A = ntohl(*(long *)(data + k));
+					A = ntohl(*(int *)(data + k));
 				continue;
 
 			case BPF_LD|BPF_H|BPF_ABS:

@@ -72,7 +72,7 @@ pty_open_hook (struct trivfs_control *cntl,
 
   pthread_mutex_lock (&global_lock);
 
-  if (ptyopen)
+  if (ptyopen || nperopens)
     {
       pthread_mutex_unlock (&global_lock);
       return EBUSY;
@@ -125,7 +125,7 @@ pty_po_destroy_hook (struct trivfs_peropen *po)
 }
 
 static inline void
-wake_reader ()
+wake_reader (void)
 {
   if (pty_read_blocked)
     {
@@ -139,7 +139,7 @@ wake_reader ()
 /* Lower half for tty node */
 
 static error_t
-ptyio_start_output ()
+ptyio_start_output (void)
 {
   if (packet_mode && output_stopped && (!(termflags & USER_OUTPUT_SUSP)))
     {
@@ -152,7 +152,7 @@ ptyio_start_output ()
 }
 
 static error_t
-ptyio_abandon_physical_output ()
+ptyio_abandon_physical_output (void)
 {
   if (packet_mode)
     {
@@ -163,7 +163,7 @@ ptyio_abandon_physical_output ()
 }
 
 static error_t
-ptyio_suspend_physical_output ()
+ptyio_suspend_physical_output (void)
 {
   if (packet_mode)
     {
@@ -176,14 +176,14 @@ ptyio_suspend_physical_output ()
 }
 
 static int
-ptyio_pending_output_size ()
+ptyio_pending_output_size (void)
 {
   /* We don't maintain any pending output buffer separate from the outputq. */
   return 0;
 }
 
 static error_t
-ptyio_notice_input_flushed ()
+ptyio_notice_input_flushed (void)
 {
   if (packet_mode)
     {
@@ -194,14 +194,14 @@ ptyio_notice_input_flushed ()
 }
 
 static error_t
-ptyio_assert_dtr ()
+ptyio_assert_dtr (void)
 {
   dtr_on = 1;
   return 0;
 }
 
 static error_t
-ptyio_desert_dtr ()
+ptyio_desert_dtr (void)
 {
   dtr_on = 0;
   wake_reader ();
@@ -248,13 +248,13 @@ ptyio_set_bits (struct termios *state)
 /* These do nothing.  In BSD the associated ioctls get errors, but
    I'd rather just ignore them. */
 static error_t
-ptyio_set_break ()
+ptyio_set_break (void)
 {
   return 0;
 }
 
 static error_t
-ptyio_clear_break ()
+ptyio_clear_break (void)
 {
   return 0;
 }
@@ -300,9 +300,9 @@ const struct bottomhalf ptyio_bottom =
 /* Validation has already been done by trivfs_S_io_read. */
 error_t
 pty_io_read (struct trivfs_protid *cred,
-	     char **data,
+	     data_t *data,
 	     mach_msg_type_number_t *datalen,
-	     mach_msg_type_number_t amount)
+	     vm_size_t amount)
 {
   int size;
 
@@ -384,9 +384,9 @@ pty_io_read (struct trivfs_protid *cred,
 /* Validation has already been done by trivfs_S_io_write. */
 error_t
 pty_io_write (struct trivfs_protid *cred,
-	      char *data,
+	      const_data_t data,
 	      mach_msg_type_number_t datalen,
-	      mach_msg_type_number_t *amount)
+	      vm_size_t *amount)
 {
   int i, flush;
   int cancel = 0;
@@ -511,7 +511,7 @@ pty_io_select (struct trivfs_protid *cred, mach_port_t reply,
     }
 }
 
-error_t
+kern_return_t
 S_tioctl_tiocsig (struct trivfs_protid *cred,
 		  int sig)
 {
@@ -533,7 +533,7 @@ S_tioctl_tiocsig (struct trivfs_protid *cred,
   return 0;
 }
 
-error_t
+kern_return_t
 S_tioctl_tiocpkt (struct trivfs_protid *cred,
 		  int mode)
 {
@@ -561,7 +561,7 @@ S_tioctl_tiocpkt (struct trivfs_protid *cred,
   return err;
 }
 
-error_t
+kern_return_t
 S_tioctl_tiocucntl (struct trivfs_protid *cred,
 		    int mode)
 {
@@ -589,7 +589,7 @@ S_tioctl_tiocucntl (struct trivfs_protid *cred,
   return err;
 }
 
-error_t
+kern_return_t
 S_tioctl_tiocremote (struct trivfs_protid *cred,
 		     int how)
 {
@@ -608,7 +608,7 @@ S_tioctl_tiocremote (struct trivfs_protid *cred,
   return 0;
 }
 
-error_t
+kern_return_t
 S_tioctl_tiocext (struct trivfs_protid *cred,
 		  int mode)
 {

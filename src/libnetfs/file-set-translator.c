@@ -25,10 +25,10 @@
 #include <hurd/paths.h>
 #include <hurd/fsys.h>
 
-error_t
+kern_return_t
 netfs_S_file_set_translator (struct protid *user,
 			     int passive_flags, int active_flags,
-			     int killtrans_flags, data_t passive,
+			     int killtrans_flags, const_data_t passive,
 			     mach_msg_type_number_t passivelen,
 			     mach_port_t active)
 {
@@ -116,7 +116,7 @@ netfs_S_file_set_translator (struct protid *user,
       switch (newmode)
 	{
 	  int major, minor;
-	  char *arg;
+	  const char *arg;
 
 	case S_IFBLK:
 	case S_IFCHR:
@@ -179,7 +179,8 @@ netfs_S_file_set_translator (struct protid *user,
     }
 
   if (! err && user->po->path && active_flags & FS_TRANS_SET)
-    err = fshelp_set_active_translator (&user->pi, user->po->path, &np->transbox);
+    err = fshelp_set_active_translator (user->pi.bucket->notify_port,
+                                        user->po->path, &np->transbox);
 
  out:
   pthread_mutex_unlock (&np->lock);

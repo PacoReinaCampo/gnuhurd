@@ -102,8 +102,8 @@ setup_terminal (struct terminal *t, struct ttyent *tt)
 	}
 
       char *line;
-      asprintf (&line, "%s %s", tt->ty_getty, tt->ty_name);
-      if (line == 0)
+      int err = asprintf (&line, "%s %s", tt->ty_getty, tt->ty_name);
+      if (err == -1)
 	{
 	  error (0, ENOMEM,
 		 "cannot allocate arguments for %s", t->name);
@@ -319,8 +319,10 @@ restart_terminal (pid_t pid)
 static void
 shutdown_terminal (struct terminal *t)
 {
+  int err;
   kill (t->pid, SIGHUP);
-  revoke (t->name);
+  err = revoke (t->name);
+  assert_backtrace (err != -1);
 }
 
 /* Re-read /etc/ttys.  If a line has turned off, kill what's there.
@@ -428,7 +430,7 @@ reopen_console (int signo)
 #endif
 
 int
-main ()
+main (void)
 {
   int fail;
   struct sigaction sa;
@@ -471,7 +473,8 @@ main ()
       /* Elicit a SIGLOST now if the console (on our stderr, i.e. fd 2) has
 	 died.  That way, the next error message emitted will actually make
 	 it out to the console if it can be made it work at all.  */
-      write (2, "", 0);
+      int err = write (2, "", 0);
+      (void) err;
 
       /* If a SIGTERM or SIGHUP arrived recently, it set a flag
 	 and broke us out of being blocked in waitpid.  */

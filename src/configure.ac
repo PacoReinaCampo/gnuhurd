@@ -1,5 +1,5 @@
 dnl Process this file with autoconf to produce a configure script.
-AC_PREREQ(2.54)			dnl Minimum Autoconf version required.
+AC_PREREQ([2.69])			dnl Minimum Autoconf version required.
 AC_INIT([GNU Hurd], [0.9], [bug-hurd@gnu.org])
 AC_CONFIG_SRCDIR([hurd/hurd_types.h])	dnl File to look for in srcdir.
 
@@ -13,9 +13,9 @@ none) AC_MSG_ERROR([
 *** to configure; you will need to use the same host specification
 *** to configure other packages for the GNU/Hurd system.]) ;;
 *) AC_MSG_ERROR([this is the gnu os, host cannot be $host_os
-*** Host configuration must be \`MACHINE-gnu' or \`MACHINE-VENDOR-gnu'.
+*** Host configuration must be `MACHINE-gnu' or `MACHINE-VENDOR-gnu'.
 *** To cross-compile, you must specify both --host and --build;
-*** for example \`--build=$host --host=$host_cpu-gnu'.
+*** for example `--build=$host --host=$host_cpu-gnu'.
 *** Run $0 --help for more information.]) ;;
 esac
 
@@ -50,7 +50,7 @@ sparc*)
 esac
 AC_SUBST(asm_syntax)
 
-test -r "$srcdir/libthreads/$asm_syntax/cthreads.h" || {
+test -r "$srcdir/pfinet/linux-src/include/asm-$asm_syntax/checksum.h" || {
   AC_MSG_WARN([unsupported CPU type $host_cpu])
 }
 
@@ -58,7 +58,7 @@ AC_ARG_ENABLE(profile,
 [  --disable-profile	  do not build profiled libraries and programs])
 AC_SUBST(enable_profile)
 
-define([default_static],['ext2fs'])dnl
+define([default_static],['ext2fs,iso9660fs,rumpdisk,pci-arbiter,acpi'])dnl
 AC_ARG_ENABLE(static-progs,
 [  --enable-static-progs=PROGRAMS...
                           build statically-linked PROGRAM.static versions
@@ -113,8 +113,6 @@ fi
 dnl Let these propagate from the environment.
 AC_SUBST(CFLAGS) AC_SUBST(CPPFLAGS) AC_SUBST(LDFLAGS)
 
-hurd_MIG_RETCODE
-
 # See if --version-script is available.
 AC_CACHE_CHECK(for ld --version-script, hurd_cv_ld_version_script_option, [dnl
 cat > conftest.c <<\EOF
@@ -144,29 +142,21 @@ rm -f conftest*])
 # See if libc was built with --enable-libio.
 AC_CACHE_CHECK([for libio],
   hurd_cv_libio,
-  AC_TRY_COMPILE([#include <stdio.h>
+  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <stdio.h>
 #ifndef _STDIO_USES_IOSTREAM
 # error No libio found.
-#endif],,
-    hurd_cv_libio=yes,
-    hurd_cv_libio=no))
+#endif]],
+    [[]])],
+    [hurd_cv_libio=yes],
+    [hurd_cv_libio=no]))
 
-# The versions of the symbols in libthreads have to match those in
-# libc.so.  Since the symbols in a libc that includes libio will be
-# versioned differently from the ones in a libc that uses stdio, this
-# isn't easy to accomplish.  Instead we leave things unversioned if
-# libio isn't found.
-if test $hurd_cv_libio = yes; then
-  VERSIONING=$hurd_cv_ld_version_script_option
-else
-  VERSIONING=no
-fi
-AC_SUBST(VERSIONING)
 # Check if libc contains these functions.
 AC_CHECK_FUNCS(file_exec_paths exec_exec_paths _hurd_exec_paths)
+AC_CHECK_FUNCS(_hurd_libc_proc_init)
+AC_CHECK_FUNCS(mach_port_set_ktype)
 
 # Compatibility with glibc < 2.28
-AC_CHECK_FUNCS(file_futimens)
+AC_CHECK_FUNCS(file_utimens)
 AC_DEFINE([UTIME_NOW],[-1])
 AC_DEFINE([UTIME_OMIT],[-2])
 
@@ -243,10 +233,38 @@ AS_IF([test "x$with_libz" != xno], [
 ])
 AC_SUBST([HAVE_LIBZ])
 
-AC_CHECK_HEADER([rump/rump.h], [
-  AC_CHECK_LIB(rump, rump_init, [HAVE_LIBRUMP=yes], [HAVE_LIBRUMP=no])
-  ], [HAVE_LIBRUMP=no])
-AC_SUBST([HAVE_LIBRUMP])
+AC_ARG_WITH([rump],
+  [AS_HELP_STRING([--without-rump], [disable rump])], , [with_rump=yes])
+
+AS_IF([test "x$with_rump" != xno], [
+  # Save
+  oldLIBS="$LIBS"
+
+  LIBS="$oldLIBS -lrump"
+  AC_LINK_IFELSE(
+    [AC_LANG_PROGRAM(
+      [[#include <hurd.h>
+#define _STANDALONE
+#include <rump/rump.h>]],
+    [])],
+    [HAVE_LIBRUMP=yes],
+    [HAVE_LIBRUMP=no])
+  AC_SUBST([HAVE_LIBRUMP])
+
+  LIBS="$oldLIBS -lrumpvfs_nofifofs_pic"
+  AC_LINK_IFELSE(
+    [AC_LANG_PROGRAM(
+      [[#include <hurd.h>
+#define _STANDALONE
+#include <rump/rump.h>]],
+    [])],
+    [HAVE_LIBRUMP_VFSNOFIFO=yes],
+    [HAVE_LIBRUMP_VFSNOFIFO=no])
+  AC_SUBST([HAVE_LIBRUMP_VFSNOFIFO])
+
+  # Reset
+  LIBS="$oldLIBS"
+])
 
 AC_ARG_ENABLE(boot-store-types,
 [  --enable-boot-store-types=TYPES...
@@ -269,67 +287,25 @@ AC_MSG_RESULT($boot_store_types)
 # Check for ncursesw, which is needed for the console-curses client.
 hurd_LIB_NCURSESW
 
-AC_PROG_LEX
-AC_PROG_YACC
-AS_IF([test "$LEX" = ":" -o "$YACC" = ":"], [
-have_x11=no
-AC_MSG_WARN([lex or yacc is mising, XKB will be disabled.])
-],[
-# Check for those Xorg modules needed for keyboard mappings.
-PKG_CHECK_MODULES([X11], [x11 xproto],
-  [ have_x11=yes
-    pkg_failed=no
-    AC_MSG_CHECKING([for xkb base])
-    _PKG_CONFIG([XKB_BASE], [variable=xkb_base], [xkeyboard-config])
-    AS_IF([test $pkg_failed = no],
-      [XKB_BASE="$pkg_cv_XKB_BASE"
-       AC_MSG_RESULT([$XKB_BASE])],
-      [XKB_BASE="$datadir/X11/xkb"
-       AC_MSG_RESULT([(default) $XKB_BASE])])
-    pkg_failed=no
-    AC_MSG_CHECKING([for X11 prefix])
-    _PKG_CONFIG([X11_PREFIX], [variable=prefix], [x11])
-    AS_IF([test $pkg_failed = no],
-      [X11_PREFIX="$pkg_cv_X11_PREFIX"
-       AC_MSG_RESULT([$X11_PREFIX])],
-      [X11_PREFIX="$prefix"
-       AC_MSG_RESULT([(default) $X11_PREFIX])])
+# Check for xkbcommon, needed for keyboard mappings.
+PKG_CHECK_MODULES([xkbcommon], [xkbcommon], [have_xkbcommon=yes], [have_xkbcommon=no])
 
-    have_keysymdef_h=no
-    AC_CHECK_HEADER([X11/keysymdef.h],
-      [AC_MSG_CHECKING([for X11/keysymdef.h absolute location])
-       AC_PREPROC_IFELSE([AC_LANG_SOURCE([[#include <X11/keysymdef.h>]])],
-         [[X11_KEYSYMDEF_H=`$SED -n 's%^[^"]*"\([^"]*X11/keysymdef.h\)".*$%\1%p' conftest.i`]
-          # did the sed magic above work?
-          AS_IF([test -f "$X11_KEYSYMDEF_H"],
-            [have_keysymdef_h=yes],
-            [X11_KEYSYMDEF_H=not-found])
-         ],
-         [X11_KEYSYMDEF_H=not-found])
-       AC_MSG_RESULT([$X11_KEYSYMDEF_H])
-      ])
-    AS_IF([test $have_keysymdef_h = no],
-      [AC_MSG_WARN([X11/keysymdef.h was not found, XKB will be disabled.])
-       have_x11=no])
-  ], [have_x11=no])
-])
-
-AS_IF([test "$have_x11" = "yes"],
-  [AC_MSG_CHECKING([whether AWK is usable])
-   AS_IF([test "$AWK" != ":" && $AWK 'BEGIN { strtonum("1"); }' 2>/dev/null],
-     [AC_MSG_RESULT([yes])],
-     [AC_MSG_RESULT([no])
-      AC_MSG_ERROR([$AWK does not provide required strtonum function])])])
-
-AC_SUBST([have_x11])
-AC_SUBST([XKB_BASE])
-AC_DEFINE_UNQUOTED([X11_PREFIX], "$X11_PREFIX")
-AC_SUBST([X11_KEYSYMDEF_H])
+AC_SUBST([have_xkbcommon])
+AC_SUBST([xkbcommon_CFLAGS])
+AC_SUBST([xkbcommon_LIBS])
 
 # Check for Sun RPC headers and library.
-AC_CHECK_HEADER([rpc/types.h], [HAVE_SUN_RPC=yes], [HAVE_SUN_RPC=no])
-AC_SEARCH_LIBS([clnt_create], [], [:], [HAVE_SUN_RPC=no])
+AC_ARG_WITH([libtirpc],
+  [AS_HELP_STRING([--without-libtirpc], [disable libtirpc use in nfs/nfsd])],
+  [],
+  [with_libtirpc=yes])
+
+AS_IF([test "x$with_libtirpc" != xno], [
+  PKG_CHECK_MODULES([libtirpc], [libtirpc], [HAVE_SUN_RPC=yes], [HAVE_SUN_RPC=no])
+])
 AC_SUBST([HAVE_SUN_RPC])
+AC_SUBST([libtirpc_CFLAGS])
+AC_SUBST([libtirpc_LIBS])
 
 if test -f ./$ac_unique_file; then
   # Configuring in source directory; don't create any Makefiles.
@@ -360,14 +336,19 @@ AC_SUBST([libdaemon_CFLAGS])
 AC_CHECK_MEMBERS([struct thread_sched_info.last_processor],,,
  [#include <mach/thread_info.h>])
 
+AC_CHECK_MEMBERS([struct mapped_time_value.time_value.seconds],,,
+ [#include <mach/time_value.h>])
+
 PKG_CHECK_MODULES([libblkid], [blkid],
   [AC_DEFINE([HAVE_BLKID], [1], [Use libblkid])],
   [true])
 AC_SUBST([libblkid_LIBS])
 AC_SUBST([libblkid_CFLAGS])
 
-AM_PATH_LIBGCRYPT("1:1.6.0",[HAVE_LIBGCRYPT=yes], [HAVE_LIBGCRYPT=no])
+PKG_CHECK_MODULES([libgcrypt], [libgcrypt], [HAVE_LIBGCRYPT=yes], [HAVE_LIBGCRYPT=no])
 AC_SUBST([HAVE_LIBGCRYPT])
+AC_SUBST([libgcrypt_LIBS])
+AC_SUBST([libgcrypt_CFLAGS])
 
 PKG_CHECK_MODULES([liblwip], [lwip], [HAVE_LIBLWIP=yes], [HAVE_LIBLWIP=no])
 AC_SUBST([HAVE_LIBLWIP])
@@ -379,7 +360,21 @@ AC_SUBST([HAVE_LIBPCIACCESS])
 AC_SUBST([libpciaccess_CFLAGS])
 AC_SUBST([libpciaccess_LIBS])
 
-AC_CONFIG_FILES([config.make ${makefiles}])
+AC_ARG_WITH([acpica],
+  [AS_HELP_STRING([--without-acpica], [disable acpica])], , [with_acpica=yes])
+
+AS_IF([test "x$with_acpica" != xno], [
+  AC_CHECK_HEADER([acpi/acpi_init.h], [
+    HAVE_LIBACPICA=yes
+    libacpica_LIBS="-lacpica -lpciaccess"
+    libacpica_CFLAGS=""],
+    [HAVE_LIBACPICA=no])
+])
+AC_SUBST([HAVE_LIBACPICA])
+AC_SUBST([libacpica_CFLAGS])
+AC_SUBST([libacpica_LIBS])
+
+AC_CONFIG_FILES([config.make ${makefiles} daemons/runsystem.hurd.sh])
 AC_OUTPUT
 
 dnl Local Variables:

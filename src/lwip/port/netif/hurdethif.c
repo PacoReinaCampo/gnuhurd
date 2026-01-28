@@ -75,7 +75,7 @@ static struct bpf_insn bpf_ether_filter[] = {
   {BPF_RET | BPF_K, 0, 0, 0},	/* Or discard it all */
 };
 
-static int bpf_ether_filter_len = sizeof (bpf_ether_filter) / sizeof (short);
+static int bpf_ether_filter_len = sizeof (bpf_ether_filter) / (sizeof (short));
 
 /* Bucket and class for the incoming data */
 struct port_bucket *etherport_bucket;
@@ -89,7 +89,7 @@ static error_t
 hurdethif_device_get_flags (struct netif *netif, uint16_t * flags)
 {
   error_t err = 0;
-  size_t count;
+  mach_msg_type_number_t count;
   struct net_status status;
   hurdethif *ethif;
 
@@ -402,7 +402,7 @@ hurdethif_demuxer (mach_msg_header_t * inp, mach_msg_header_t * outp)
   else
     local_port = inp->msgh_local_port;
 
-  for (netif = netif_list; netif; netif = netif->next)
+  NETIF_FOREACH(netif)
     if (local_port == netif_get_state (netif)->readptname)
       break;
 
@@ -457,7 +457,7 @@ err_t
 hurdethif_device_init (struct netif *netif)
 {
   error_t err;
-  size_t count = 2;
+  mach_msg_type_number_t count = 2;
   int net_address[2];
   device_t ether_port;
   hurdethif *ethif;
@@ -528,15 +528,17 @@ hurdethif_device_init (struct netif *netif)
   /* Enable Ethernet multicasting */
   hurdethif_device_get_flags (netif, &netif_get_state (netif)->flags);
   netif_get_state (netif)->flags |=
-    IFF_UP | IFF_RUNNING | IFF_BROADCAST | IFF_ALLMULTI;
+    IFF_UP | IFF_BROADCAST | IFF_ALLMULTI;
   hurdethif_device_set_flags (netif, netif_get_state (netif)->flags);
 
   /*
    * Up the link, set the interface type to NETIF_FLAG_ETHARP
    * and enable other features.
    */
-  netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_LINK_UP
-    | NETIF_FLAG_IGMP | NETIF_FLAG_MLD6;
+  netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_IGMP | NETIF_FLAG_MLD6;
+
+  if (netif_get_state (netif)->flags & IFF_RUNNING)
+    netif->flags |= NETIF_FLAG_LINK_UP;
 
   return ERR_OK;
 }
@@ -544,6 +546,8 @@ hurdethif_device_init (struct netif *netif)
 static void *
 hurdethif_input_thread (void *arg)
 {
+  pthread_setname_np (pthread_self (), "input");
+
   ports_manage_port_operations_one_thread (etherport_bucket,
 					   hurdethif_demuxer, 0);
 
@@ -556,7 +560,7 @@ hurdethif_input_thread (void *arg)
  * This function should be called once.
  */
 error_t
-hurdethif_module_init ()
+hurdethif_module_init (void)
 {
   error_t err;
   etherport_bucket = ports_create_bucket ();

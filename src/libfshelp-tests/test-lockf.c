@@ -110,7 +110,7 @@ int parse_args (int argc, char **argv, char **file_name,
 	      *len = tmp;
 	    }
 	  else
-	    error (1, EINVAL, "%s", str);
+	    error (1, EINVAL, "missing number");
 	  continue;
 	}
       if (strncmp (str, "st", 2) == 0)
@@ -127,7 +127,7 @@ int parse_args (int argc, char **argv, char **file_name,
 	      *sleep_time = tmp;
 	    }
 	  else
-	    error (1, EINVAL, "%s", str);
+	    error (1, EINVAL, "missing number");
 	  continue;
 	}
       error (1, EINVAL, "%s", str);
@@ -168,7 +168,7 @@ int main (int argc, char **argv)
   if (fd < 0)
     error (1, errno, "open");
   printf ("Opening '%s', fd = %d, ", file_name, fd);
-  printf ("cmd = %s, len = %ld\n", cmdc, len);
+  printf ("cmd = %s, len = %lld\n", cmdc, (long long) len);
   printf ("Requesting lock\n");
   err = lockf (fd, cmd, len);
   if (err)

@@ -20,6 +20,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <error.h>
+#include <inttypes.h>
 #include <hurd/store.h>
 #include "ext2fs.h"
 
@@ -42,10 +43,10 @@ allocate_mod_map (void)
        global blocks are actually modified so the pager can write only them. */
     {
       /* One bit per filesystem block.  */
-      mod_map_size = sblock->s_blocks_count >> 3;
+      mod_map_size = le32toh (sblock->s_blocks_count) >> 3;
       modified_global_blocks = mmap (0, mod_map_size, PROT_READ|PROT_WRITE,
 				     MAP_ANON, 0, 0);
-      assert_backtrace (modified_global_blocks != (void *) -1);
+      assert_backtrace (modified_global_blocks != MAP_FAILED);
     }
   else
     modified_global_blocks = 0;
@@ -60,6 +61,7 @@ get_hypermetadata (void)
 {
   error_t err;
   size_t read = 0;
+  u_int32_t features;
 
   if (sblock != NULL)
     munmap (sblock, SBLOCK_SIZE);
@@ -69,26 +71,26 @@ get_hypermetadata (void)
   if (err || read != SBLOCK_SIZE)
     ext2_panic ("Cannot read hypermetadata");
 
-  if (sblock->s_magic != EXT2_SUPER_MAGIC
+  if (sblock->s_magic != htole16 (EXT2_SUPER_MAGIC)
 #ifdef EXT2FS_PRE_02B_COMPAT
-      && sblock->s_magic != EXT2_PRE_02B_MAGIC
+      && sblock->s_magic != htole16 (EXT2_PRE_02B_MAGIC)
 #endif
       )
     ext2_panic ("bad magic number %#x (should be %#x)",
-		sblock->s_magic, EXT2_SUPER_MAGIC);
+		le16toh (sblock->s_magic), EXT2_SUPER_MAGIC);
 
-  log2_block_size = EXT2_MIN_BLOCK_LOG_SIZE + sblock->s_log_block_size;
+  log2_block_size = EXT2_MIN_BLOCK_LOG_SIZE + le32toh(sblock->s_log_block_size);
   block_size = 1 << log2_block_size;
 
   if (block_size > EXT2_MAX_BLOCK_SIZE)
     ext2_panic ("block size %d is too big (max is %d bytes)",
 		block_size, EXT2_MAX_BLOCK_SIZE);
 
-  log2_dev_blocks_per_fs_block = log2_block_size - store->log2_block_size;
-  if (log2_dev_blocks_per_fs_block < 0)
+  if (log2_block_size < store->log2_block_size)
     ext2_panic ("block size %d isn't a power-of-two multiple of the device"
 		" block size (%zd)!",
 		block_size, store->block_size);
+  log2_dev_blocks_per_fs_block = log2_block_size - store->log2_block_size;
 
   log2_stat_blocks_per_fs_block = 0;
   while ((512 << log2_stat_blocks_per_fs_block) < block_size)
@@ -97,13 +99,13 @@ get_hypermetadata (void)
     ext2_panic ("block size %d isn't a power-of-two multiple of 512!",
 		block_size);
 
-  if ((store->size >> log2_block_size) < sblock->s_blocks_count)
+  if ((store->size >> log2_block_size) < le32toh (sblock->s_blocks_count))
     ext2_panic ("disk size (%qd bytes) too small; superblock says we need %qd",
 		(long long int) store->size,
-		(long long int) sblock->s_blocks_count << log2_block_size);
+	       (long long int) le32toh (sblock->s_blocks_count) << log2_block_size);
   if (log2_dev_blocks_per_fs_block != 0
       && (store->size & ((1 << log2_dev_blocks_per_fs_block) - 1)) != 0)
-    ext2_warning ("%Ld (%zd byte) device blocks "
+    ext2_warning ("%" PRIi64 " (%zd byte) device blocks "
 		  " unused after last filesystem (%d byte) block",
 		  (store->size & ((1 << log2_dev_blocks_per_fs_block) - 1)),
 		  store->block_size, block_size);
@@ -111,40 +113,44 @@ get_hypermetadata (void)
   /* Set these handy variables.  */
   inodes_per_block = block_size / EXT2_INODE_SIZE (sblock);
 
-  frag_size = EXT2_MIN_FRAG_SIZE << sblock->s_log_frag_size;
-  if (frag_size)
-    frags_per_block = block_size / frag_size;
-  else
+  frag_size = EXT2_MIN_FRAG_SIZE << le32toh (sblock->s_log_frag_size);
+  if (frag_size == 0)
     ext2_panic ("frag size is zero!");
+  frags_per_block = block_size / frag_size;
 
-  if (sblock->s_rev_level > EXT2_GOOD_OLD_REV)
+  if (le32toh (sblock->s_rev_level) > EXT2_GOOD_OLD_REV)
     {
-      if (sblock->s_feature_incompat & ~EXT2_FEATURE_INCOMPAT_SUPP)
-	ext2_panic ("could not mount because of unsupported optional features"
-		    " (0x%x)",
-		    sblock->s_feature_incompat & ~EXT2_FEATURE_INCOMPAT_SUPP);
-      if (sblock->s_feature_ro_compat & ~EXT2_FEATURE_RO_COMPAT_SUPP)
+      features = EXT2_HAS_INCOMPAT_FEATURE(sblock, EXT2_FEATURE_INCOMPAT_UNSUPPORTED);
+      if (features)
+	ext2_panic ("could not mount because of unsupported optional features "
+		    "(0x%x)",
+		    features);
+      features = EXT2_HAS_RO_COMPAT_FEATURE(sblock, EXT2_FEATURE_RO_COMPAT_UNSUPPORTED);
+      if (features)
 	{
-	  ext2_warning ("mounted readonly because of"
-			" unsupported optional features (0x%x)",
-			sblock->s_feature_ro_compat & ~EXT2_FEATURE_RO_COMPAT_SUPP);
+	  ext2_warning ("mounted readonly because of "
+			"unsupported optional features (0x%x)",
+			features);
 	  diskfs_readonly = 1;
 	}
-      if (sblock->s_inode_size != EXT2_GOOD_OLD_INODE_SIZE)
-	ext2_panic ("inode size %d isn't supported", sblock->s_inode_size);
+      uint16_t inode_size = le16toh (sblock->s_inode_size);
+      if (inode_size < EXT2_GOOD_OLD_INODE_SIZE || (inode_size & (inode_size - 1)) != 0)
+	ext2_panic ("inode size %d isn't supported", inode_size);
+      if (EXT2_HAS_COMPAT_FEATURE (sblock, EXT3_FEATURE_COMPAT_HAS_JOURNAL))
+        ext2_warning ("mounting ext3 filesystem as ext2");
     }
 
   groups_count =
-    ((sblock->s_blocks_count - sblock->s_first_data_block +
-      sblock->s_blocks_per_group - 1)
-     / sblock->s_blocks_per_group);
+    ((le32toh (sblock->s_blocks_count) - le32toh (sblock->s_first_data_block) +
+      le32toh (sblock->s_blocks_per_group) - 1)
+     / le32toh (sblock->s_blocks_per_group));
 
-  itb_per_group = sblock->s_inodes_per_group / inodes_per_block;
+  itb_per_group = le32toh (sblock->s_inodes_per_group) / inodes_per_block;
   desc_per_block = block_size / sizeof (struct ext2_group_desc);
   addr_per_block = block_size / sizeof (block_t);
   db_per_group = (groups_count + desc_per_block - 1) / desc_per_block;
 
-  ext2fs_clean = sblock->s_state & EXT2_VALID_FS;
+  ext2fs_clean = sblock->s_state & htole16 (EXT2_VALID_FS);
   if (! ext2fs_clean)
     {
       ext2_warning ("FILESYSTEM NOT UNMOUNTED CLEANLY; PLEASE fsck");
@@ -175,28 +181,38 @@ map_hypermetadata (void)
   /* Cache a convenient pointer to the block group descriptors for allocation.
      These are stored in the filesystem blocks following the superblock.  */
   group_desc_image =
-    (struct ext2_group_desc *) bptr (bptr_block (mapped_sblock) + 1);
+    (struct ext2_group_desc *) bptr (group_desc_block);
+
+  global_inode_size = le16toh (sblock->s_inode_size);
+
+  if (global_inode_size == 0)
+    global_inode_size = EXT2_GOOD_OLD_INODE_SIZE;
 }
 
 error_t
 diskfs_set_hypermetadata (int wait, int clean)
 {
-  if (clean && ext2fs_clean && !(sblock->s_state & EXT2_VALID_FS))
+  if (clean && ext2fs_clean && !(sblock->s_state & htole16 (EXT2_VALID_FS)))
     /* The filesystem is clean, so we need to set the clean flag.  */
     {
-      sblock->s_state |= EXT2_VALID_FS;
+      sblock->s_state |= htole16 (EXT2_VALID_FS);
       sblock_dirty = 1;
     }
-  else if (!clean && (sblock->s_state & EXT2_VALID_FS))
+  else if (!clean && (sblock->s_state & htole16 (EXT2_VALID_FS)))
     /* The filesystem just became dirty, so clear the clean flag.  */
     {
-      sblock->s_state &= ~EXT2_VALID_FS;
+      sblock->s_state &= htole16 (~EXT2_VALID_FS);
       sblock_dirty = 1;
       wait = 1;
     }
 
  if (sblock_dirty)
    {
+     if (diskfs_readonly)
+       return EROFS; /* impossible to write */
+
+     /* Before writing, set the time of write */
+     sblock->s_wtime = htole32 (diskfs_mtime->seconds);
      sblock_dirty = 0;
      memcpy (mapped_sblock, sblock, SBLOCK_SIZE);
      disk_cache_block_ref_ptr (mapped_sblock);
@@ -204,8 +220,13 @@ diskfs_set_hypermetadata (int wait, int clean)
    }
 
   sync_global (wait);
-
-  /* Should check writability here and return EROFS if necessary. XXX */
+  if (wait)
+    {
+      error_t err = store_sync (store);
+      /* Ignore EOPNOTSUPP (legacy drivers), but warn on real I/O errors */
+      if (err && err != EOPNOTSUPP)
+        ext2_warning ("device flush failed: %s", strerror (err));
+    }
   return 0;
 }
 
@@ -219,6 +240,6 @@ diskfs_readonly_changed (int readonly)
   mprotect (disk_cache, disk_cache_size,
 	    PROT_READ | (readonly ? 0 : PROT_WRITE));
 
-  if (!readonly && !(sblock->s_state & EXT2_VALID_FS))
+  if (!readonly && !(sblock->s_state & htole16 (EXT2_VALID_FS)))
     ext2_warning ("UNCLEANED FILESYSTEM NOW WRITABLE");
 }

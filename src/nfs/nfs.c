@@ -25,6 +25,7 @@
 
 #include <string.h>
 #include <netinet/in.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <sys/sysmacros.h>
 
@@ -140,7 +141,7 @@ hurd_mode_to_nfs_type (mode_t mode)
 
 /* Encode an NFS file handle.  */
 int *
-xdr_encode_fhandle (int *p, struct fhandle *fhandle)
+xdr_encode_fhandle (int *p, const struct fhandle *fhandle)
 {
   if (protocol_version == 2)
     {
@@ -153,7 +154,7 @@ xdr_encode_fhandle (int *p, struct fhandle *fhandle)
 
 /* Encode uninterpreted bytes.  */
 int *
-xdr_encode_data (int *p, char *data, size_t len)
+xdr_encode_data (int *p, const char *data, size_t len)
 {
   int nints = INTSIZE (len);
 
@@ -163,20 +164,44 @@ xdr_encode_data (int *p, char *data, size_t len)
   return p + nints;
 }
 
-/* Encode a 64 bit integer.  */
+/* Encode a 64 bit unsigned integer.  */
 int *
-xdr_encode_64bit (int *p, long long n)
+xdr_encode_64bit (int *p, uint64_t n)
 {
-  *(p++) = htonl (n & 0xffffffff00000000LL >> 32);
+  *(p++) = htonl ((n & 0xffffffff00000000ULL) >> 32);
   *(p++) = htonl (n & 0xffffffff);
   return p;
 }
 
 /* Encode a C string.  */
 int *
-xdr_encode_string (int *p, char *string)
+xdr_encode_string (int *p, const char *string)
 {
   return xdr_encode_data (p, string, strlen (string));
+}
+
+/* Some NFSv3 rpcs can fail if the file size field
+   is set within the set attributes unnecessarily. */
+static inline bool
+nfs_sattr3_size_needed(mode_t mode, size_t sz)
+{
+  if (sz == 0)
+    {
+      switch (hurd_mode_to_nfs_type (mode))
+	{
+	case NFSOCK:
+	case NF3FIFO:
+	  /* NFCHR and NFBLK probaly also fall into this
+	     category but as unable to check then leave
+	     those alone. */
+	  return false;
+
+	default:
+	  break;
+	}
+    }
+
+  return true;
 }
 
 /* Encode a MODE into an otherwise empty sattr.  */
@@ -266,7 +291,7 @@ xdr_encode_sattr_size (int *p, off_t size)
 
 /* Encode ATIME and MTIME into an otherwise empty sattr.  */
 int *
-xdr_encode_sattr_times (int *p, struct timespec *atime, struct timespec *mtime)
+xdr_encode_sattr_times (int *p, const struct timespec *atime, const struct timespec *mtime)
 {
   if (protocol_version == 2)
     {
@@ -357,7 +382,7 @@ xdr_encode_create_state (int *p,
 /* Encode ST into an sattr.  */
 int *
 xdr_encode_sattr_stat (int *p,
-		       struct stat *st)
+		       const struct stat *st)
 {
   if (protocol_version == 2)
     {
@@ -372,14 +397,17 @@ xdr_encode_sattr_stat (int *p,
     }
   else
     {
+      bool needs_size = nfs_sattr3_size_needed (st->st_mode, st->st_size);
+
       *(p++) = htonl (1);		/* set mode */
       *(p++) = htonl (hurd_mode_to_nfs_mode (st->st_mode));
       *(p++) = htonl (1);		/* set uid */
       *(p++) = htonl (st->st_uid);
       *(p++) = htonl (1);		/* set gid */
       *(p++) = htonl (st->st_gid);
-      *(p++) = htonl (1);		/* set size */
-      p = xdr_encode_64bit (p, st->st_size);
+      *(p++) = htonl (needs_size);	/* set size */
+      if (needs_size)
+	p = xdr_encode_64bit (p, st->st_size);
       *(p++) = htonl (SET_TO_CLIENT_TIME); /* set atime */
       *(p++) = htonl (st->st_atim.tv_sec);
       *(p++) = htonl (st->st_atim.tv_nsec);
@@ -391,17 +419,17 @@ xdr_encode_sattr_stat (int *p,
 }
 
 
-/* Decode *P into a long long; return the address of the following
+/* Decode *P into a uint64_t; return the address of the following
    data.  */
 int *
-xdr_decode_64bit (int *p, long long *n)
+xdr_decode_64bit (int *p, uint64_t *n)
 {
-  long long high, low;
+  uint64_t high, low;
   high = ntohl (*p);
   p++;
   low = ntohl (*p);
   p++;
-  *n = ((high & 0xffffffff) << 32) | (low & 0xffffffff);
+  *n = (((uint64_t)(high & 0xffffffff)) << 32) | (low & 0xffffffff);
   return p;
 }
 
@@ -453,10 +481,14 @@ xdr_decode_fattr (int *p, struct stat *st)
       p++;
       st->st_blocks = ntohl (*p);
       p++;
+      st->st_fsid = ntohl (*p);
+      p++;
+      st->st_ino = ntohl (*p);
+      p++;
     }
   else
     {
-      long long size;
+      uint64_t size;
       int major, minor;
       p = xdr_decode_64bit (p, &size);
       st->st_size = size;
@@ -468,11 +500,9 @@ xdr_decode_fattr (int *p, struct stat *st)
       minor = ntohl (*p);
       p++;
       st->st_rdev = gnu_dev_makedev (major, minor);
+      p = xdr_decode_64bit(p, &st->st_fsid);
+      p = xdr_decode_64bit(p, &st->st_ino);
     }
-  st->st_fsid = ntohl (*p);
-  p++;
-  st->st_ino = ntohl (*p);
-  p++;
   st->st_atim.tv_sec = ntohl (*p);
   p++;
   st->st_atim.tv_nsec = ntohl (*p);
@@ -606,7 +636,7 @@ nfs_initialize_rpc (int rpc_proc, struct iouser *cred,
   else
     uid = gid = second_gid = -1;
 
-  return initialize_rpc (NFS_PROGRAM, NFS_VERSION, rpc_proc, len, bufp,
+  return initialize_rpc (nfs_program, nfs_version, rpc_proc, len, bufp,
 			 uid, gid, second_gid);
 }
 

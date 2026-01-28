@@ -51,7 +51,7 @@ struct pipe_class
 		  char **data, size_t *data_len, size_t amount);
   /* Write DATA &c into the packet queue PQ.  */
   error_t (*write)(struct pq *pq, void *source,
-		   char *data, size_t data_len, size_t *amount);
+		   const char *data, size_t data_len, size_t *amount);
 };
 
 /* pipe_class flags  */
@@ -129,6 +129,8 @@ extern error_t pipe_wait_readable (struct pipe *pipe, int noblock, int data_only
 extern error_t pipe_select_readable (struct pipe *pipe, struct timespec *tsp,
 				     int data_only);
 
+extern error_t pipe_wait_writable_amount (struct pipe *pipe, int noblock, size_t amount);
+
 extern error_t pipe_wait_writable (struct pipe *pipe, int noblock);
 
 extern error_t pipe_select_writable (struct pipe *pipe, struct timespec *tsp);
@@ -202,16 +204,15 @@ pipe_select_readable (struct pipe *pipe, struct timespec *tsp, int data_only)
   return err;
 }
 
-/* Block until data can be written to PIPE.  If NOBLOCK is true, then
-   EWOULDBLOCK is returned instead of blocking if this can't be done
+/* Block until at least AMOUNT data can be written to PIPE.  If NOBLOCK is true,
+   then EWOULDBLOCK is returned instead of blocking if this can't be done
    immediately.  */
 PIPE_EI error_t
-pipe_wait_writable (struct pipe *pipe, int noblock)
+pipe_wait_writable_amount (struct pipe *pipe, int noblock, size_t amount)
 {
-  size_t limit = pipe->write_limit;
   if (pipe->flags & PIPE_BROKEN)
     return EPIPE;
-  while (pipe_readable (pipe, 1) >= limit)
+  while (pipe_readable (pipe, 1) + amount >= pipe->write_limit)
     {
       if (noblock)
 	return EWOULDBLOCK;
@@ -223,15 +224,24 @@ pipe_wait_writable (struct pipe *pipe, int noblock)
   return 0;
 }
 
+/* Block until data can be written to PIPE.  If NOBLOCK is true, then
+   EWOULDBLOCK is returned instead of blocking if this can't be done
+   immediately.  */
+PIPE_EI error_t
+pipe_wait_writable (struct pipe *pipe, int noblock)
+{
+  return pipe_wait_writable_amount (pipe, noblock, 1);
+}
+
 /* Block until some data can be written to PIPE.  This call only returns once
    threads waiting using pipe_wait_writable have been woken and given a
    chance to write, and if there is still space available thereafter.  */
 PIPE_EI error_t
 pipe_select_writable (struct pipe *pipe, struct timespec *tsp)
 {
-  size_t limit = pipe->write_limit;
   error_t err = 0;
-  while (! (pipe->flags & PIPE_BROKEN) && pipe_readable (pipe, 1) >= limit)
+  while (! (pipe->flags & PIPE_BROKEN)
+	 && pipe_readable (pipe, 1) >= pipe->write_limit)
     {
       err = pthread_hurd_cond_timedwait_np (&pipe->pending_writes,
 					    &pipe->lock, tsp);
@@ -377,9 +387,9 @@ pipe_drain (struct pipe *pipe)
    of the data, to be provided to any readers of it; if no reader ever reads
    it, it's deallocated by calling pipe_dealloc_addr.  */
 error_t pipe_send (struct pipe *pipe, int noblock, void *source,
-		   char *data, size_t data_len,
-		   char *control, size_t control_len,
-		   mach_port_t *ports, size_t num_ports,
+		   const char *data, size_t data_len,
+		   const char *control, size_t control_len,
+		   const mach_port_t *ports, size_t num_ports,
 		   size_t *amount);
 
 /* Writes up to LEN bytes of DATA, to PIPE, which should be locked, and

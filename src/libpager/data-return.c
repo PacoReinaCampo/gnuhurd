@@ -43,7 +43,7 @@ _pager_do_write_request (struct pager *p,
   struct lock_list {struct lock_request *lr;
 		    struct lock_list *next;} *lock_list, *ll;
   int wakeup;
-  int omitdata = 0;
+  unsigned omitdata = 0;
 
   if (!p
       || p->port.class != _pager_class)
@@ -60,7 +60,7 @@ _pager_do_write_request (struct pager *p,
     }
   if (length % __vm_page_size)
     {
-      printf ("incg data return: bad length size %zd\n", length);
+      printf ("incg data return: bad length size %lu\n", (unsigned long)length);
       goto release_out;
     }
   if (offset % __vm_page_size)
@@ -125,11 +125,11 @@ _pager_do_write_request (struct pager *p,
   /* Mark these pages as being paged out.  */
   if (initializing)
     {
-      assert_backtrace (npages <= 32);
+      assert_backtrace (npages < 32);
       for (i = 0; i < npages; i++)
 	{
 	  if (pm_entries[i] & PM_INIT)
-	    omitdata |= 1 << i;
+	    omitdata |= 1U << i;
 	  else
 	    pm_entries[i] |= PM_PAGINGOUT | PM_INIT;
 	}
@@ -158,14 +158,53 @@ _pager_do_write_request (struct pager *p,
   /* Let someone else in. */
   pthread_mutex_unlock (&p->interlock);
 
-  /* This is inefficient; we should send all the pages to the device at once
-     but until the pager library interface is changed, this will have to do. */
+  int i_page = 0;
+  while (i_page < npages)
+    {
+      if (omitdata & (1U << i_page))
+	{
+	  i_page++;
+	  continue;
+	}
 
-  for (i = 0; i < npages; i++)
-    if (!(omitdata & (1 << i)))
-      pagerrs[i] = pager_write_page (p->upi,
-				     offset + (vm_page_size * i),
-				     data + (vm_page_size * i));
+      /* Find maximal contiguous run [i_page, j_page) with no omitdata.  */
+      int j_page = i_page + 1;
+      while (j_page < npages && ! (omitdata & (1U << j_page)))
+	j_page++;
+
+      vm_offset_t run_off = offset + (vm_page_size * i_page);
+      vm_address_t run_ptr = data + (vm_page_size * i_page);
+      vm_size_t run_len = vm_page_size * (j_page - i_page);
+
+      vm_size_t wrote = 0;
+
+      /* Attempt bulk write.  */
+      error_t berr = pager_write_pages (p->upi, run_off, run_ptr,
+					run_len, &wrote);
+
+      /* How many pages did bulk actually complete? (only if not EOPNOTSUPP) */
+      int pages_done = 0;
+      if (berr != EOPNOTSUPP)
+	{
+	  if (wrote > run_len)
+	    wrote = run_len;
+	  wrote -= (wrote % vm_page_size);
+	  pages_done = wrote / vm_page_size;
+	}
+
+      /* Mark successful prefix (if any).  */
+      for (int k = 0; k < pages_done; k++)
+	pagerrs[i_page + k] = 0;
+
+      /* Per-page the remaining suffix of the run, or the whole run if unsupported.  */
+      for (int k = i_page + pages_done; k < j_page; k++)
+	  pagerrs[k] = pager_write_page (p->upi,
+					 offset + (vm_page_size * k),
+					 data + (vm_page_size * k));
+
+      i_page = j_page;
+    }
+
 
   /* Acquire the right to meddle with the pagemap */
   pthread_mutex_lock (&p->interlock);
@@ -175,7 +214,7 @@ _pager_do_write_request (struct pager *p,
   wakeup = 0;
   for (i = 0; i < npages; i++)
     {
-      if (omitdata & (1 << i))
+      if (omitdata & (1U << i))
 	{
 	  notified[i] = 0;
 	  continue;
@@ -258,7 +297,7 @@ _pager_S_memory_object_data_return (struct pager *p,
 					 mach_port_t control,
 					 vm_offset_t offset,
 					 pointer_t data,
-					 vm_size_t length,
+					 mach_msg_type_number_t length,
 					 int dirty,
 					 int kcopy)
 {

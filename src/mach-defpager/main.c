@@ -32,6 +32,7 @@
 #include <error.h>
 #include <signal.h>
 #include <string.h>
+#include <sys/mman.h>
 
 /* XXX */
 #include <fcntl.h>
@@ -41,20 +42,17 @@
 #include <hurd.h>
 #include <hurd/port.h>
 #include <hurd/fd.h>
+#include <hurd/paths.h>
+#include <hurd/startup.h>
+#include <assert-backtrace.h>
 /* XXX */
 
 #include "default_pager.h"
 
+const char *defpager_server_name = "mach-defpager";
+
 mach_port_t	bootstrap_master_device_port;	/* local name */
 mach_port_t	bootstrap_master_host_port;	/* local name */
-
-extern void	default_pager();
-extern void	default_pager_initialize();
-extern void	default_pager_setup();
-
-/* initialized in default_pager_initialize */
-extern mach_port_t default_pager_exception_port;
-
 
 static void
 printf_init (device_t master)
@@ -67,7 +65,7 @@ printf_init (device_t master)
   stdin = mach_open_devstream (cons, "r");
   stdout = stderr = mach_open_devstream (cons, "w");
   mach_port_deallocate (mach_task_self (), cons);
-  setbuf (stdout, 0);
+  setlinebuf (stderr);
 }
 
 
@@ -115,7 +113,9 @@ main (int argc, char **argv)
 	  error (1, errno, "cannot become daemon");
 	case 0:
 	  setsid ();
-	  chdir ("/");
+	  err = chdir ("/");
+	  if (err == -1)
+	    error (3, errno, "chdir call failed");
 	  close (0);
 	  close (1);
 	  close (2);
@@ -139,6 +139,18 @@ main (int argc, char **argv)
     error (3, err, "cannot mark us as important");
 
   mach_port_deallocate (mach_task_self (), proc);
+
+  /* Mark us as essential.  */
+  mach_port_t startup;
+  startup = file_name_lookup (_SERVERS_STARTUP, 0, 0);
+  if (startup == MACH_PORT_NULL)
+    error (0, errno, "WARNING: Cannot register as essential task\n");
+
+  startup_essential_task (startup, mach_task_self (), MACH_PORT_NULL,
+			  program_invocation_short_name,
+			  bootstrap_master_host_port);
+
+  mach_port_deallocate (mach_task_self (), startup);
 
   printf_init(bootstrap_master_device_port);
 
@@ -183,5 +195,5 @@ panic (const char *fmt, ...)
   va_start (ap, fmt);
   vfprintf (stderr, fmt, ap);
   va_end (ap);
-  exit (3);
+  assert_backtrace (0);
 }

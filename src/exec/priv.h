@@ -136,16 +136,16 @@ void check_hashbang (struct execdata *e,
 		     file_t file,
 		     task_t oldtask,
 		     int flags,
-		     char *filename,
-		     char *argv, u_int argvlen, boolean_t argv_copy,
-		     char *envp, u_int envplen, boolean_t envp_copy,
-		     mach_port_t *dtable, u_int dtablesize,
+		     const char *filename,
+		     char *argv, mach_msg_type_number_t argvlen, boolean_t argv_copy,
+		     char *envp, mach_msg_type_number_t envplen, boolean_t envp_copy,
+		     mach_port_t *dtable, mach_msg_type_number_t dtablesize,
 		     boolean_t dtable_copy,
-		     mach_port_t *portarray, u_int nports,
+		     mach_port_t *portarray, mach_msg_type_number_t nports,
 		     boolean_t portarray_copy,
-		     int *intarray, u_int nints, boolean_t intarray_copy,
-		     mach_port_t *deallocnames, u_int ndeallocnames,
-		     mach_port_t *destroynames, u_int ndestroynames);
+		     int *intarray, mach_msg_type_number_t nints, boolean_t intarray_copy,
+		     const mach_port_t *deallocnames, mach_msg_type_number_t ndeallocnames,
+		     const mach_port_t *destroynames, mach_msg_type_number_t ndestroynames);
 
 
 /* Standard exec data for secure execs.  */

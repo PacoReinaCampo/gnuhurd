@@ -1,4 +1,5 @@
-/*
+/* MIG type translation information
+
    Copyright (C) 1991,93,94,2014 Free Software Foundation, Inc.
    Written by Michael I. Bushnell.
 

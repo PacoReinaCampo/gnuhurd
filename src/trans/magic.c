@@ -150,7 +150,7 @@ magic_getroot (struct trivfs_control *cntl,
 	       mach_port_t reply_port,
 	       mach_msg_type_name_t reply_port_type,
 	       mach_port_t dotdot,
-	       uid_t *uids, u_int nuids, uid_t *gids, u_int ngids,
+	       const uid_t *uids, mach_msg_type_number_t nuids, const uid_t *gids, mach_msg_type_number_t ngids,
 	       int flags,
 	       retry_type *do_retry, char *retry_name,
 	       mach_port_t *node, mach_msg_type_name_t *node_type)
@@ -189,7 +189,7 @@ magic_open  (struct trivfs_control *cntl,
   if (!err)
     {
       /* We consume the reference for DOTDOT.  */
-      (*cred)->po->hook = (void *) dotdot;
+      (*cred)->po->hook = (void *) (uintptr_t) dotdot;
       struct magic *const m = cntl->hook;
       m->nusers++;
     }
@@ -199,7 +199,7 @@ magic_open  (struct trivfs_control *cntl,
 static void
 magic_peropen_destroy (struct trivfs_peropen *po)
 {
-  mach_port_deallocate (mach_task_self (), (mach_port_t) po->hook);
+  mach_port_deallocate (mach_task_self (), (mach_port_t)(uintptr_t) po->hook);
 }
 
 
@@ -217,7 +217,7 @@ magic_protid_destroy (struct trivfs_protid *cred)
 error_t
 trivfs_S_dir_lookup (struct trivfs_protid *cred,
 		     mach_port_t reply, mach_msg_type_name_t reply_type,
-		     char *name,
+		     const_string_t name,
 		     int flags,
 		     mode_t mode,
 		     retry_type *retry_type,
@@ -261,7 +261,7 @@ trivfs_S_dir_lookup (struct trivfs_protid *cred,
 	    ++name;
 	  strcpy (retry_name, name);
 	  *retry_type = FS_RETRY_REAUTH;
-	  *retrypt = (mach_port_t) cred->po->hook;
+	  *retrypt = (mach_port_t)(uintptr_t) cred->po->hook;
 	  *retrypt_type = MACH_MSG_TYPE_COPY_SEND;
 	  return 0;
 	}
@@ -300,7 +300,7 @@ trivfs_S_dir_lookup (struct trivfs_protid *cred,
 
   /* Execute the open */
 
-  dotdot = (mach_port_t) cred->po->hook;
+  dotdot = (mach_port_t)(uintptr_t) cred->po->hook;
   err = iohelp_dup_iouser (&user, cred->user);
   if (err)
     return err;
@@ -525,7 +525,7 @@ trivfs_S_fsys_forward (mach_port_t server,
 		       mach_port_t reply,
 		       mach_msg_type_name_t replytype,
 		       mach_port_t requestor,
-		       char *argz, size_t argz_len)
+		       const char *argz, mach_msg_type_number_t argz_len)
 {
   struct trivfs_protid *cred
     = ports_lookup_port (all_fsys->pi.bucket, server, trivfs_protid_class);

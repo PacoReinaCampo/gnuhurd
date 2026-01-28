@@ -51,8 +51,13 @@ struct ftpfs *ftpfs;
 /* Parameters describing the server we're connecting to.  */
 struct ftp_conn_params *ftpfs_ftp_params = 0;
 
+static int interrupt_check_hook (struct ftp_conn *)
+{
+  return ports_self_interrupted ();
+}
+
 /* customization hooks.  */
-struct ftp_conn_hooks ftpfs_ftp_hooks = { interrupt_check: ports_self_interrupted };
+struct ftp_conn_hooks ftpfs_ftp_hooks = { interrupt_check: interrupt_check_hook };
 
 /* The (user-specified) name of the SERVER:FILESYSTEM we're connected too.  */
 char *ftpfs_remote_fs;
@@ -344,9 +349,14 @@ netfs_append_args (char **argz, size_t *argz_len)
       if (debug_stream != stderr)
 	{
 	  char *rep;
-	  asprintf (&rep, "--debug=%s", debug_stream_name);
-	  err = argz_add (argz, argz_len, rep);
-	  free (rep);
+	  err = asprintf (&rep, "--debug=%s", debug_stream_name);
+	  if (err != -1)
+	    {
+	      err = argz_add (argz, argz_len, rep);
+	      free (rep);
+	    }
+	  else
+	    err = errno;
 	}
       else
 	err = argz_add (argz, argz_len, "--debug");

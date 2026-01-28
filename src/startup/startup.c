@@ -118,8 +118,11 @@ static struct ess_task *ess_tasks;
 static struct ntfy_task *ntfy_tasks;
 
 
-/* Our receive right */
+/* Our receive rights.  */
 static mach_port_t startup;
+static mach_port_t notify;
+
+static mach_port_t port_set;
 
 /* Ports to the kernel.  We use alias to the internal glibc locations
    so that other code can get them using get_privileged_ports.  */
@@ -243,6 +246,7 @@ notify_shutdown (const char *msg)
       error_t err;
       fprintf (stderr, "%s: notifying %s of %s...",
                program_invocation_short_name, n->name, msg);
+      fflush (stderr);
 
       err = startup_dosync (n->notify_port, 60000); /* 1 minute to reply */
       if (err == MACH_SEND_INVALID_DEST)
@@ -263,7 +267,7 @@ reboot_system (int flags)
   if (fakeboot)
     {
       pid_t *pp;
-      size_t npids = 0;
+      mach_msg_type_number_t npids = 0;
       error_t err;
       int ind;
 
@@ -293,9 +297,9 @@ reboot_system (int flags)
 	  if (task != mach_task_self () && task != proctask)
 	    {
 	      struct procinfo *pi = 0;
-	      size_t pisize = 0;
+	      mach_msg_type_number_t pisize = 0;
 	      char *noise;
-	      size_t noise_len = 0;
+	      mach_msg_type_number_t noise_len = 0;
 	      int flags;
 	      err = proc_getprocinfo (procserver, pp[ind], &flags,
 				      (int **)&pi, &pisize,
@@ -340,7 +344,7 @@ request_dead_name (mach_port_t name)
 {
   mach_port_t prev;
   mach_port_request_notification (mach_task_self (), name,
-				  MACH_NOTIFY_DEAD_NAME, 1, startup,
+				  MACH_NOTIFY_DEAD_NAME, 1, notify,
 				  MACH_MSG_TYPE_MAKE_SEND_ONCE, &prev);
   if (prev != MACH_PORT_NULL)
     mach_port_deallocate (mach_task_self (), prev);
@@ -371,7 +375,7 @@ record_essential_task (const char *name, task_t task)
 #if 0
   /* Taking over the exception port will give us a better chance
      if the task tries to get wedged on a fault.  */
-  task_set_special_port (task, TASK_EXCEPTION_PORT, startup);
+  task_set_special_port (task, TASK_EXCEPTION_PORT, notify);
 #endif
 
   return 0;
@@ -494,7 +498,7 @@ argz_task_insert_right (char **argz, size_t *argz_len, task_t task,
     }
   while (err == KERN_NAME_EXISTS);
 
-  if (asprintf (&arg, "--%s=%lu", argument, name) < 0)
+  if (asprintf (&arg, "--%s=%u", argument, name) < 0)
     return errno;
 
   err = argz_add (argz, argz_len, arg);
@@ -630,13 +634,13 @@ mig_reply_setup (
 	mach_msg_header_t	*out)
 {
       static const mach_msg_type_t RetCodeType = {
-		/* msgt_name = */		MACH_MSG_TYPE_INTEGER_32,
-		/* msgt_size = */		32,
-		/* msgt_number = */		1,
-		/* msgt_inline = */		TRUE,
-		/* msgt_longform = */		FALSE,
-		/* msgt_deallocate = */		FALSE,
-		/* msgt_unused = */		0
+        .msgt_name = MACH_MSG_TYPE_INTEGER_32,
+        .msgt_size = 32,
+        .msgt_number = 1,
+        .msgt_inline = TRUE,
+        .msgt_longform = FALSE,
+        .msgt_deallocate = FALSE,
+        .msgt_unused = 0
 	};
 
 #define	InP	(in)
@@ -724,7 +728,6 @@ parse_opt (int key, char *arg, struct argp_state *state)
     case OPT_KERNEL_TASK:
       kernel_task = atoi (arg);
       break;
-    default: return ARGP_ERR_UNKNOWN;
     }
   return 0;
 }
@@ -767,7 +770,7 @@ main (int argc, char **argv, char **envp)
   stdin = mach_open_devstream (consdev, "r");
   if (stdout == NULL || stdin == NULL)
     crash_mach ();
-  setbuf (stdout, NULL);
+  setlinebuf (stderr);
 
   err = wire_task_self ();
   if (err)
@@ -782,6 +785,20 @@ main (int argc, char **argv, char **envp)
   assert_perror_backtrace (err);
   err = mach_port_insert_right (mach_task_self (), startup, startup,
 				MACH_MSG_TYPE_MAKE_SEND);
+  assert_perror_backtrace (err);
+  err = mach_port_allocate (mach_task_self (),
+                            MACH_PORT_RIGHT_RECEIVE,
+                            &notify);
+  assert_perror_backtrace (err);
+  err = mach_port_allocate (mach_task_self (),
+                            MACH_PORT_RIGHT_PORT_SET,
+                            &port_set);
+  assert_perror_backtrace (err);
+  err = mach_port_move_member (mach_task_self (),
+                               startup, port_set);
+  assert_perror_backtrace (err);
+  err = mach_port_move_member (mach_task_self (),
+                               notify, port_set);
   assert_perror_backtrace (err);
 
   /* Crash if the boot filesystem task dies.  */
@@ -809,9 +826,12 @@ main (int argc, char **argv, char **envp)
   /* All programs we start should ignore job control stop signals.
      That way Posix.1 B.2.2.2 is satisfied where it says that programs
      not run under job control shells are protected.  */
-  default_ints[INIT_SIGIGN] = (sigmask (SIGTSTP)
-			       | sigmask (SIGTTIN)
-			       | sigmask (SIGTTOU));
+  sigset_t sigmask;
+  sigemptyset (&sigmask);
+  sigaddset (&sigmask, SIGTSTP);
+  sigaddset (&sigmask, SIGTTIN);
+  sigaddset (&sigmask, SIGTTOU);
+  default_ints[INIT_SIGIGN] = sigmask;
 
   default_ports[INIT_PORT_BOOTSTRAP] = startup;
   run ("/hurd/proc", default_ports, &proctask, proc_insert_ports);
@@ -826,7 +846,7 @@ main (int argc, char **argv, char **envp)
      run launch_system which does the rest of the boot.  */
   while (1)
     {
-      err = mach_msg_server (demuxer, 0, startup);
+      err = mach_msg_server (demuxer, 0, port_set);
       assert_perror_backtrace (err);
     }
 }
@@ -879,8 +899,11 @@ launch_core_servers (void)
 
   err = install_as_translator ();
   if (err)
-    /* Good luck.  Who knows, maybe it's an old installation.  */
-    error (0, err, "Failed to bind to " _SERVERS_STARTUP);
+    {
+      /* Good luck.  Who knows, maybe it's an old installation.  */
+      mach_print ("Failed to bind to " _SERVERS_STARTUP "\n");
+      error (0, err, "Failed to bind to " _SERVERS_STARTUP);
+    }
 
   if (verbose)
     fprintf (stderr, "Installed on /servers/startup\n");
@@ -959,7 +982,7 @@ launch_core_servers (void)
 
 /* Set up the initial value of the standard exec data. */
 void
-init_stdarrays ()
+init_stdarrays (void)
 {
   auth_t nullauth;
   mach_port_t pt;
@@ -1013,7 +1036,7 @@ dump_processes (void)
   for (pid = 1; pid < 100; pid++)
     {
       char args[256], *buffer = args;
-      size_t len = sizeof args;
+      mach_msg_type_number_t len = sizeof args;
       if (proc_getprocargs (procserver, pid, &buffer, &len) == 0)
         {
           fprintf (stderr, "pid%d\t%s\n", (int) pid, buffer);
@@ -1217,7 +1240,7 @@ process_signal (int signo)
 	  if (pid == child_pid)
 	    {
 	      /* The big magilla bit the dust.  */
-
+	      error_t err;
 	      char *desc = 0;
 
 	      mach_port_deallocate (mach_task_self (), child_task);
@@ -1225,16 +1248,21 @@ process_signal (int signo)
 	      child_pid = -1;
 
 	      if (WIFSIGNALED (status))
-		asprintf (&desc, "terminated abnormally (%s)",
-			  strsignal (WTERMSIG (status)));
+		err = asprintf (&desc, "terminated abnormally (%s)",
+				strsignal (WTERMSIG (status)));
 	      else if (WIFSTOPPED (status))
-		asprintf (&desc, "stopped abnormally (%s)",
-			  strsignal (WTERMSIG (status)));
+		err = asprintf (&desc, "stopped abnormally (%s)",
+				strsignal (WTERMSIG (status)));
 	      else if (WEXITSTATUS (status) == 0)
-		desc = strdup ("finished");
+		{
+		  desc = strdup ("finished");
+		  err = (desc == 0 ? -1 : 0);
+		}
 	      else
-		asprintf (&desc, "exited with status %d",
-			  WEXITSTATUS (status));
+		err = asprintf (&desc, "exited with status %d",
+				WEXITSTATUS (status));
+	      if (err == -1)
+		error (0, errno, "failed to allocate message string");
 
 	      {
 		char buf[40];
@@ -1261,7 +1289,7 @@ start_child (const char *prog, char **progargs)
 
   if (progargs == 0)
     {
-      const char *argv[] = { "/libexec/console-run", prog, 0 };
+      const char *argv[] = { LIBEXECDIR "/console-run", prog, 0 };
       err = argz_create ((char **) argv, &args, &arglen);
     }
   else
@@ -1271,7 +1299,7 @@ start_child (const char *prog, char **progargs)
 	++argc;
       {
 	const char *argv[2 + argc + 1];
-	argv[0] = "/libexec/console-run";
+	argv[0] = LIBEXECDIR "/console-run";
 	argv[1] = prog;
 	argv[2 + argc] = 0;
 	while (argc-- > 0)
@@ -1347,7 +1375,7 @@ launch_something (const char *why)
   static unsigned int try;
   static const char *const tries[] =
   {
-    "/libexec/runsystem",
+    LIBEXECDIR "/runsystem",
     _PATH_BSHELL,
     "/bin/shd",			/* XXX */
   };
@@ -1459,15 +1487,11 @@ S_startup_essential_task (mach_port_t server,
 			  mach_msg_type_name_t replytype,
 			  task_t task,
 			  mach_port_t excpt,
-			  char *name,
+			  const_string_t name,
 			  mach_port_t credential)
 {
-  static int authinit, procinit, execinit;
+  static int authinit, procinit, execinit, fsinit;
   int fail;
-
-  /* Always deallocate the extra reference this message carries.  */
-  if (MACH_PORT_VALID (credential))
-    mach_port_deallocate (mach_task_self (), credential);
 
   if (credential != host_priv)
     return EPERM;
@@ -1479,6 +1503,12 @@ S_startup_essential_task (mach_port_t server,
   fail = record_essential_task (name, task);
   if (fail)
     return fail;
+
+  task_set_essential (task, TRUE);
+
+  /* Always deallocate the extra reference this message carries.  */
+  if (MACH_PORT_VALID (credential))
+    mach_port_deallocate (mach_task_self (), credential);
 
   if (!booted)
     {
@@ -1494,11 +1524,21 @@ S_startup_essential_task (mach_port_t server,
         }
       else if (!strcmp (name, "proc"))
 	procinit = 1;
+      else if (strlen (name) >= 2 && !strcmp (name + strlen(name) - 2, "fs"))
+        fsinit = 1;
+      else
+        {
+          mach_port_t otherproc;
+          proc_child (procserver, task);
+          proc_task2proc (procserver, task, &otherproc);
+          proc_mark_important (otherproc);
+          proc_set_exe (otherproc, name);
+        }
 
       if (verbose)
         fprintf (stderr, "  still waiting for:");
 
-      if (authinit && execinit && procinit)
+      if (authinit && execinit && procinit && fsinit)
 	{
           if (verbose)
             fprintf (stderr, " none!\n");
@@ -1524,6 +1564,8 @@ S_startup_essential_task (mach_port_t server,
             fprintf (stderr, " exec");
           if (! procinit)
             fprintf (stderr, " proc");
+          if (! fsinit)
+            fprintf (stderr, " fs");
           fprintf (stderr, "\n");
         }
     }
@@ -1534,7 +1576,7 @@ S_startup_essential_task (mach_port_t server,
 kern_return_t
 S_startup_request_notification (mach_port_t server,
 				mach_port_t notify,
-				char *name)
+				const_string_t name)
 {
   struct ntfy_task *nt;
 
@@ -1553,13 +1595,14 @@ S_startup_request_notification (mach_port_t server,
 }
 
 kern_return_t
-do_mach_notify_dead_name (mach_port_t notify,
+do_mach_notify_dead_name (mach_port_t notify_port,
 			  mach_port_t name)
 {
   struct ntfy_task *nt, *pnt;
   struct ess_task *et;
 
-  assert_backtrace (notify == startup);
+  if (notify_port != notify)
+    return EOPNOTSUPP;
 
   /* Deallocate the extra reference the notification carries. */
   mach_port_deallocate (mach_task_self (), name);
@@ -1606,7 +1649,7 @@ do_mach_notify_dead_name (mach_port_t notify,
 		   boots[i].name);
 	    crash_mach ();
 	  }
-      error (0, 0, "BUG!  Unexpected dead-name notification (name %#lx)",
+      error (0, 0, "BUG!  Unexpected dead-name notification (name %#x)",
 	     name);
       crash_mach ();
     }
@@ -1682,9 +1725,9 @@ S_msg_add_auth (mach_port_t process,
 kern_return_t
 S_msg_del_auth (mach_port_t process,
 	mach_port_t task,
-	intarray_t uids,
+	const_intarray_t uids,
 	mach_msg_type_number_t uidsCnt,
-	intarray_t gids,
+	const_intarray_t gids,
 	mach_msg_type_number_t gidsCnt)
 { return _S_msg_del_auth (process, task, uids, uidsCnt, gids, gidsCnt); }
 
@@ -1718,7 +1761,7 @@ S_msg_get_init_ports (mach_port_t process,
 kern_return_t
 S_msg_set_init_ports (mach_port_t process,
 	mach_port_t refport,
-	portarray_t ports,
+	const_portarray_t ports,
 	mach_msg_type_number_t portsCnt)
 { return _S_msg_set_init_ports (process, refport, ports, portsCnt); }
 
@@ -1750,7 +1793,7 @@ S_msg_get_init_ints (mach_port_t process,
 kern_return_t
 S_msg_set_init_ints (mach_port_t process,
 	mach_port_t refport,
-	intarray_t values,
+	const_intarray_t values,
 	mach_msg_type_number_t valuesCnt)
 { return _S_msg_set_init_ints (process, refport, values, valuesCnt); }
 
@@ -1767,7 +1810,7 @@ S_msg_get_dtable (mach_port_t process,
 kern_return_t
 S_msg_set_dtable (mach_port_t process,
 	mach_port_t refport,
-	portarray_t dtable,
+	const_portarray_t dtable,
 	mach_msg_type_number_t dtableCnt)
 { return _S_msg_set_dtable (process, refport, dtable, dtableCnt); }
 
@@ -1799,14 +1842,14 @@ S_msg_get_environment (mach_port_t process,
 kern_return_t
 S_msg_set_environment (mach_port_t process,
 	mach_port_t refport,
-	data_t value,
+	const_data_t value,
 	mach_msg_type_number_t valueCnt)
 { return _S_msg_set_environment (process, refport, value, valueCnt); }
 
 
 kern_return_t
 S_msg_get_env_variable (mach_port_t process,
-	string_t variable,
+	const_string_t variable,
 	data_t *value,
 	mach_msg_type_number_t *valueCnt)
 { return _S_msg_get_env_variable (process, variable, value, valueCnt); }
@@ -1815,15 +1858,15 @@ S_msg_get_env_variable (mach_port_t process,
 kern_return_t
 S_msg_set_env_variable (mach_port_t process,
 	mach_port_t refport,
-	string_t variable,
-	string_t value,
+	const_string_t variable,
+	const_string_t value,
 	boolean_t replace)
 { return _S_msg_set_env_variable (process, refport, variable, value, replace); }
 
-error_t
+kern_return_t
 S_msg_describe_ports (mach_port_t process,
 		      mach_port_t refport,
-		      mach_port_array_t names,
+		      const_mach_port_array_t names,
 		      mach_msg_type_number_t namesCnt,
 		      data_t *descriptions,
 		      mach_msg_type_number_t *descriptionsCnt)
@@ -1832,7 +1875,7 @@ S_msg_describe_ports (mach_port_t process,
 				descriptions, descriptionsCnt);
 }
 
-error_t
+kern_return_t
 S_msg_report_wait (mach_port_t process, thread_t thread,
 		   string_t desc, mach_msg_id_t *rpc)
 {
@@ -1842,14 +1885,16 @@ S_msg_report_wait (mach_port_t process, thread_t thread,
 }
 
 /* fsys */
-error_t
+kern_return_t
 S_fsys_getroot (mach_port_t fsys_t,
 		mach_port_t dotdotnode,
-		uid_t *uids, size_t nuids,
-		uid_t *gids, size_t ngids,
+		const id_t *uids,
+		mach_msg_type_number_t nuids,
+		const id_t *gids,
+		mach_msg_type_number_t ngids,
 		int flags,
 		retry_type *do_retry,
-		char *retry_name,
+		string_t retry_name,
 		mach_port_t *ret,
 		mach_msg_type_name_t *rettype)
 {
@@ -1873,7 +1918,7 @@ S_fsys_getroot (mach_port_t fsys_t,
   return 0;
 }
 
-error_t
+kern_return_t
 S_fsys_get_options (mach_port_t control,
 		    data_t *data, mach_msg_type_number_t *len)
 {
@@ -1881,7 +1926,7 @@ S_fsys_get_options (mach_port_t control,
   return EOPNOTSUPP;
 }
 
-error_t
+kern_return_t
 S_file_check_access (mach_port_t server,
                      int *allowed)
 {
@@ -1891,7 +1936,7 @@ S_file_check_access (mach_port_t server,
   return 0;
 }
 
-error_t
+kern_return_t
 S_io_stat (mach_port_t server,
            struct stat *st)
 {
@@ -1907,14 +1952,16 @@ S_io_stat (mach_port_t server,
   return 0;
 }
 
-error_t
+kern_return_t
 S_io_restrict_auth (mach_port_t server,
                     mach_port_t *newport,
                     mach_msg_type_name_t *newporttype,
-                    uid_t *uids, size_t nuids,
-                    uid_t *gids, size_t ngids)
+                    const uid_t *uids,
+                    mach_msg_type_number_t nuids,
+                    const uid_t *gids,
+                    mach_msg_type_number_t ngids)
 {
-  struct idvec user = { uids, (unsigned) nuids, (unsigned) nuids };
+  struct idvec user = { (uid_t*) uids, (unsigned) nuids, (unsigned) nuids };
 
   if (server != startup)
     return EOPNOTSUPP;

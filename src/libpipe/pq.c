@@ -23,6 +23,7 @@
 #include <string.h>
 #include <stddef.h>
 #include <sys/mman.h>
+#include <assert-backtrace.h>
 
 #include "pq.h"
 
@@ -193,20 +194,21 @@ packet_extend (struct packet *packet, size_t new_len)
     /* A malloc'd packet.  */
     {
       char *new_buf;
-      char *old_buf = packet->buf;
+      ptrdiff_t start_offset = packet->buf_start - packet->buf;
+      ptrdiff_t end_offset = packet->buf_end - packet->buf;
 
       if (new_len >= PACKET_SIZE_LARGE)
 	/* The old packet length is malloc'd, but we want to vm_allocate the
 	   new length, so we'd have to copy the old contents.  */
 	return 0;
 
-      new_buf = realloc (old_buf, new_len);
+      new_buf = realloc (packet->buf, new_len);
       if (! new_buf)
 	return 0;
 
       packet->buf = new_buf;
-      packet->buf_start = new_buf + (packet->buf_start  - old_buf);
-      packet->buf_end = new_buf + (packet->buf_end  - old_buf);
+      packet->buf_start = new_buf + start_offset;
+      packet->buf_end = new_buf + end_offset;
     }
 
   packet->buf_len = new_len;
@@ -292,7 +294,7 @@ packet_dealloc_ports (struct packet *packet)
    if a memory allocation error occurred, otherwise, 0.  */
 error_t
 packet_set_ports (struct packet *packet,
-		  mach_port_t *ports, size_t num_ports)
+		  const mach_port_t *ports, size_t num_ports)
 {
   if (packet->num_ports > 0)
     packet_dealloc_ports (packet);
@@ -333,7 +335,7 @@ packet_read_ports (struct packet *packet,
    and return the amount appended in AMOUNT if that's not the null pointer.  */
 error_t
 packet_write (struct packet *packet,
-	      char *data, size_t data_len, size_t *amount)
+	      const char *data, size_t data_len, size_t *amount)
 {
   error_t err = packet_ensure (packet, data_len);
 
@@ -409,7 +411,13 @@ packet_fetch (struct packet *packet,
 	/* Just copy the data the old fashioned way....  */
 	{
 	  if (*data_len < amount)
-	    *data = mmap (0, amount, PROT_READ|PROT_WRITE, MAP_ANON, 0, 0);
+	    {
+	      *data = mmap (0, amount, PROT_READ|PROT_WRITE, MAP_ANON, 0, 0);
+	      if (*data == MAP_FAILED)
+		assert_perror_backtrace (errno);
+	      else
+		assert_backtrace (*data);
+	    }
 
 	  memcpy (*data, start, amount);
 	  start += amount;

@@ -140,7 +140,8 @@ cat (mach_port_t node, char *str)
 	  break;
 	else
 	  {
-	    write (0, data, data_len);
+	    ssize_t err2 = write (0, data, data_len);
+	    assert_backtrace (err2 == data_len);
 	    if (data != buf)
 	      munmap (data, data_len);
 	  }
@@ -157,12 +158,17 @@ static void
 add_utmp_entry (char *args, unsigned args_len, int inherit_host)
 {
   struct utmp utmp;
+  struct timeval current_time;
   char const *host = 0;
   long addr = 0;
 
   memset (&utmp, 0, sizeof(utmp));
 
-  gettimeofday (&utmp.ut_tv, 0);
+  gettimeofday (&current_time, NULL);
+  /* For x86_64, sizeof(utmp.ut_tv) != sizeof(struct timeval) */
+  utmp.ut_tv.tv_sec = current_time.tv_sec;
+  utmp.ut_tv.tv_usec = current_time.tv_usec;
+
   strncpy (utmp.ut_name, envz_get (args, args_len, "USER") ?: "",
 	   sizeof (utmp.ut_name));
 
@@ -285,7 +291,7 @@ static void
 kill_login (process_t proc_server, pid_t pid, int sig)
 {
   error_t err;
-  size_t num_pids;
+  mach_msg_type_number_t num_pids;
   pid_t self = getpid ();
 
   do
@@ -329,6 +335,7 @@ dog (time_t timeout, pid_t pid, char **argv)
 {
   if (fork () == 0)
     {
+      int err;
       char buf[25];		/* Be gratuitously pretty.  */
       char *name = basename (argv[0]);
       time_t left = timeout;
@@ -343,8 +350,9 @@ dog (time_t timeout, pid_t pid, char **argv)
 
 	  /* Frob ARGV so that ps show something nice.  */
 	  fmt_named_interval (&tv, 0, buf, sizeof buf);
-	  asprintf (&argv[0], "(watchdog for %s %d: %s remaining)",
-		    name, pid, buf);
+	  err = asprintf (&argv[0], "(watchdog for %s %d: %s remaining)",
+			  name, pid, buf);
+	  assert_backtrace (err != -1);
 	  argv[1] = 0;
 
 	  sleep (interval);
@@ -415,6 +423,9 @@ main(int argc, char *argv[])
   mach_port_t auth;		/* The new shell's authentication.  */
   mach_port_t proc_server = getproc ();
   pid_t pid = getpid (), sid;
+  mach_port_t *please_dealloc, *pdp;
+  struct hurd_userlink ulink_ports[INIT_PORT_MAX];
+  mach_port_t port;
 
   /* These three functions are to do child-authenticated lookups.  See
      <hurd/lookup.h> for an explanation.  */
@@ -679,10 +690,15 @@ main(int argc, char *argv[])
 	}
     }
 
+  /* Try proc_setowner () for compatibility with older proc server.  */
   if (ugids.eff_uids.num > 0)
     proc_setowner (proc_server, ugids.eff_uids.ids[0], 0);
   else
     proc_setowner (proc_server, 0, 1); /* Clear the owner.  */
+
+  /* XXX: we should be sharing the implementation with glibc's hurdexec */
+  please_dealloc = alloca ((3 + INIT_PORT_MAX + 1) * sizeof(mach_port_t));
+  pdp = please_dealloc;
 
   /* Now start constructing the exec arguments.  */
   memset (ints, 0, sizeof (*ints) * INIT_INT_MAX);
@@ -690,10 +706,20 @@ main(int argc, char *argv[])
   ints[INIT_UMASK] = arg && *arg ? strtoul (arg, 0, 8) : umask (0);
 
   for (i = 0; i < 3; i++)
-    fds[i] = getdport (i);
+    {
+      fds[i] = getdport (i);
+      *pdp++ = fds[i];
+    }
 
   for (i = 0; i < INIT_PORT_MAX; i++)
+  {
     ports[i] = MACH_PORT_NULL;
+
+    port = _hurd_port_get (&_hurd_ports[i], &ulink_ports[i]);
+    if (port != MACH_PORT_NULL)
+      *pdp++ = port;
+  }
+
   ports[INIT_PORT_PROC] = getproc ();
   ports[INIT_PORT_CTTYID] = getcttyid ();
   ports[INIT_PORT_CRDIR] = getcrdir ();	/* May be replaced below. */
@@ -770,7 +796,10 @@ main(int argc, char *argv[])
 	  envz_add (&args, &args_len, "HOME", "/");
 	}
       else
-        ports[INIT_PORT_CWDIR] = cwd;
+	{
+	  mach_port_deallocate (mach_task_self (), ports[INIT_PORT_CWDIR]);
+	  ports[INIT_PORT_CWDIR] = cwd;
+	}
     }
 
   arg = envz_get (args, args_len, "ROOT");
@@ -850,7 +879,10 @@ main(int argc, char *argv[])
 	{
 	  mach_port_t motd_node = child_lookup (arg, 0, O_RDONLY);
 	  if (motd_node != MACH_PORT_NULL)
-	    cat (motd_node, arg);
+	    {
+	      cat (motd_node, arg);
+	      mach_port_deallocate (mach_task_self (), motd_node);
+	    }
 	}
       else
 	mach_port_deallocate (mach_task_self (), hush_node);
@@ -858,7 +890,11 @@ main(int argc, char *argv[])
 
   /* Now that we don't need to use PORTS for lookups anymore, put the correct
      ROOT in.  */
-  ports[INIT_PORT_CRDIR] = root;
+  if (ports[INIT_PORT_CRDIR] != root)
+    {
+      mach_port_deallocate (mach_task_self (), ports[INIT_PORT_CRDIR]);
+      ports[INIT_PORT_CRDIR] = root;
+    }
 
   /* Get rid of any accumulated null entries in env.  */
   envz_strip (&env, &env_len);
@@ -890,7 +926,7 @@ main(int argc, char *argv[])
 			 fds, MACH_MSG_TYPE_COPY_SEND, 3,
 			 ports, MACH_MSG_TYPE_COPY_SEND, INIT_PORT_MAX,
 			 ints, INIT_INT_MAX,
-			 0, 0, 0, 0);
+			 please_dealloc, pdp-please_dealloc, 0, 0);
   /* Fallback in case the file server hasn't been restarted.  */
   if (err == MIG_BAD_ID)
 #endif
@@ -899,7 +935,7 @@ main(int argc, char *argv[])
 		     fds, MACH_MSG_TYPE_COPY_SEND, 3,
 		     ports, MACH_MSG_TYPE_COPY_SEND, INIT_PORT_MAX,
 		     ints, INIT_INT_MAX,
-		     0, 0, 0, 0);
+		     please_dealloc, pdp-please_dealloc, 0, 0);
   if (err)
     error(5, err, "%s", shell);
 

@@ -22,6 +22,7 @@
 #include <fcntl.h>
 #include <mach.h>
 #include <mach/machine/vm_param.h> /* For VM_XXX_ADDRESS */
+#include <mach/gnumach.h> /* For task_set_name */
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -29,6 +30,8 @@
 #include <unistd.h>
 #include <errno.h>
 #include <error.h>
+#include <link.h>
+#include <assert-backtrace.h>
 
 #include "boot_script.h"
 #include "private.h"
@@ -60,6 +63,9 @@ boot_script_task_create (struct cmd *cmd)
       error (0, err, "%s: task_create", cmd->path);
       return BOOT_SCRIPT_MACH_ERROR;
     }
+
+  task_set_name (cmd->task, cmd->path);
+
   err = task_suspend (cmd->task);
   if (err)
     {
@@ -89,10 +95,12 @@ boot_script_task_resume (struct cmd *cmd)
 int
 boot_script_prompt_task_resume (struct cmd *cmd)
 {
-  char xx[5];
+  int c;
 
   printf ("Hit return to resume %s...", cmd->path);
-  fgets (xx, sizeof xx, stdin);
+  do {
+    c = fgetc (stdin);
+  } while (c != EOF && c != '\n');
 
   return boot_script_task_resume (cmd);
 }
@@ -163,11 +171,12 @@ static vm_address_t
 load_image (task_t t,
 	    char *file)
 {
+  ssize_t err;
   int fd;
   union
     {
       struct exec a;
-      Elf32_Ehdr e;
+      ElfW(Ehdr) e;
     } hdr;
   char msg[] = ": cannot open bootstrap file\n";
 
@@ -175,20 +184,25 @@ load_image (task_t t,
 
   if (fd == -1)
     {
-      write (2, file, strlen (file));
-      write (2, msg, sizeof msg - 1);
+      size_t len = strlen (file);
+      err = write (2, file, len);
+      assert_backtrace (err == len);
+      err = write (2, msg, sizeof msg - 1);
+      assert_backtrace (err == (sizeof msg - 1));
       task_terminate (t);
       exit (1);
     }
 
-  read (fd, &hdr, sizeof hdr);
+  err = read (fd, &hdr, sizeof hdr);
+  assert_backtrace (err == (sizeof hdr));
   /* File must have magic ELF number.  */
   if (hdr.e.e_ident[0] == 0177 && hdr.e.e_ident[1] == 'E' &&
       hdr.e.e_ident[2] == 'L' && hdr.e.e_ident[3] == 'F')
     {
-      Elf32_Phdr phdrs[hdr.e.e_phnum], *ph;
+      ElfW(Phdr) phdrs[hdr.e.e_phnum], *ph;
       lseek (fd, hdr.e.e_phoff, SEEK_SET);
-      read (fd, phdrs, sizeof phdrs);
+      err = read (fd, phdrs, sizeof phdrs);
+      assert_backtrace (err == (sizeof phdrs));
       for (ph = phdrs; ph < &phdrs[sizeof phdrs/sizeof phdrs[0]]; ++ph)
 	if (ph->p_type == PT_LOAD)
 	  {
@@ -200,7 +214,8 @@ load_image (task_t t,
 				       PROT_READ|PROT_WRITE, MAP_ANON, 0, 0);
 
 	    lseek (fd, ph->p_offset, SEEK_SET);
-	    read (fd, (void *)(buf + offs), ph->p_filesz);
+	    err = read (fd, (void *)(buf + offs), ph->p_filesz);
+	    assert_backtrace (err == (ph->p_filesz));
 
 	    ph->p_memsz = ((ph->p_vaddr + ph->p_memsz + ph->p_align - 1)
 			   & ~(ph->p_align - 1));
@@ -233,7 +248,8 @@ load_image (task_t t,
       rndamount = round_page (amount);
       buf = mmap (0, rndamount, PROT_READ|PROT_WRITE, MAP_ANON, 0, 0);
       lseek (fd, sizeof hdr.a - headercruft, SEEK_SET);
-      read (fd, buf, amount);
+      err = read (fd, buf, amount);
+      assert_backtrace (err == amount);
       vm_allocate (t, &base, rndamount, 0);
       vm_write (t, base, (vm_address_t) buf, rndamount);
       if (magic != OMAGIC)
@@ -257,39 +273,53 @@ boot_script_exec_cmd (void *hook,
 {
   char *args, *p;
   int arg_len, i;
-  size_t reg_size;
+  mach_msg_type_number_t reg_size;
   void *arg_pos;
   vm_offset_t stack_start, stack_end;
   vm_address_t startpc, str_start;
   thread_t thread;
+  ssize_t err;
+  size_t len;
 
-  write (2, path, strlen (path));
+  len = strlen (path);
+  err = write (2, path, len);
+  assert_backtrace (err == len);
   for (i = 1; i < argc; ++i)
     {
       int quote = !! index (argv[i], ' ') || !! index (argv[i], '\t');
-      write (2, " ", 1);
+      err = write (2, " ", 1);
+      assert_backtrace (err == 1);
       if (quote)
-        write (2, "\"", 1);
-      write (2, argv[i], strlen (argv[i]));
+	{
+	  err = write (2, "\"", 1);
+	  assert_backtrace (err == 1);
+	}
+      len = strlen (argv[i]);
+      err = write (2, argv[i], len);
+      assert_backtrace (err == len);
       if (quote)
-        write (2, "\"", 1);
+	{
+	  err = write (2, "\"", 1);
+	  assert_backtrace (err == 1);
+	}
     }
-  write (2, "\r\n", 2);
+  err = write (2, "\r\n", 2);
+  assert_backtrace (err == 2);
 
   startpc = load_image (task, path);
-  arg_len = stringlen + (argc + 2) * sizeof (char *) + sizeof (integer_t);
-  arg_len += 5 * sizeof (int);
+  arg_len = stringlen + (argc + 2) * sizeof (char *) + sizeof (intptr_t);
+  arg_len += 5 * sizeof (intptr_t);
   stack_end = VM_MAX_ADDRESS;
   stack_start = VM_MAX_ADDRESS - 16 * 1024 * 1024;
   vm_allocate (task, &stack_start, stack_end - stack_start, FALSE);
-  arg_pos = (void *) ((stack_end - arg_len) & ~(sizeof (natural_t) - 1));
+  arg_pos = (void *) ((stack_end - arg_len) & ~(sizeof (intptr_t) - 1));
   args = mmap (0, stack_end - trunc_page ((vm_offset_t) arg_pos),
 	       PROT_READ|PROT_WRITE, MAP_ANON, 0, 0);
   str_start = ((vm_address_t) arg_pos
-	       + (argc + 2) * sizeof (char *) + sizeof (integer_t));
+	       + (argc + 2) * sizeof (char *) + sizeof (intptr_t));
   p = args + ((vm_address_t) arg_pos & (vm_page_size - 1));
-  *(int *) p = argc;
-  p = (void *) p + sizeof (int);
+  *(intptr_t *) p = argc;
+  p = (void *) p + sizeof (intptr_t);
   for (i = 0; i < argc; i++)
     {
       *(char **) p = argv[i] - strings + (char *) str_start;
@@ -313,8 +343,13 @@ boot_script_exec_cmd (void *hook,
     reg_size = i386_THREAD_STATE_COUNT;
     thread_get_state (thread, i386_THREAD_STATE,
 		      (thread_state_t) &regs, &reg_size);
-    regs.eip = (int) startpc;
-    regs.uesp = (int) arg_pos;
+#ifdef __x86_64__
+    regs.rip = (uintptr_t) startpc;
+    regs.ursp = (uintptr_t) arg_pos;
+#else
+    regs.eip = (uintptr_t) startpc;
+    regs.uesp = (uintptr_t) arg_pos;
+#endif
     thread_set_state (thread, i386_THREAD_STATE,
 		      (thread_state_t) &regs, reg_size);
   }
@@ -327,6 +362,17 @@ boot_script_exec_cmd (void *hook,
     regs.r30 = (natural_t) arg_pos;
     regs.pc = (natural_t) startpc;
     thread_set_state (thread, ALPHA_THREAD_STATE,
+		      (thread_state_t) &regs, reg_size);
+  }
+#elif defined (AARCH64_THREAD_STATE_COUNT)
+  {
+    struct aarch64_thread_state regs;
+    reg_size = AARCH64_THREAD_STATE_COUNT;
+    thread_get_state (thread, AARCH64_THREAD_STATE,
+		      (thread_state_t) &regs, &reg_size);
+    regs.sp = (long) arg_pos;
+    regs.pc = (long) startpc;
+    thread_set_state (thread, AARCH64_THREAD_STATE,
 		      (thread_state_t) &regs, reg_size);
   }
 #else

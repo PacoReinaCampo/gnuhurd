@@ -44,7 +44,7 @@ static struct argp_option options[] =
 };
 static char *args_doc = "[PID]";
 static char *doc = "Show hurd uids/gids."
-"\vIf PID is suppplied, show ids in that process.";
+"\vIf PID is supplied, show ids in that process.";
 
 /* ---------------------------------------------------------------- */
 

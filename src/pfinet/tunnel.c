@@ -287,11 +287,11 @@ void (*trivfs_protid_destroy_hook) (struct trivfs_protid *) = pi_destroy_hook;
 /* Read data from an IO object.  If offset is -1, read from the object
    maintained file pointer.  If the object is not seekable, offset is
    ignored.  The amount desired to be read is in AMOUNT.  */
-error_t
+kern_return_t
 trivfs_S_io_read (struct trivfs_protid *cred,
                   mach_port_t reply, mach_msg_type_name_t reply_type,
                   data_t *data, mach_msg_type_number_t *data_len,
-                  loff_t offs, size_t amount)
+                  off_t offs, vm_size_t amount)
 {
   struct tunnel_device *tdev;
   struct sk_buff *skb;
@@ -365,14 +365,14 @@ trivfs_S_io_read (struct trivfs_protid *cred,
    object at a time; servers implement congestion control by delaying
    responses to io_write.  Servers may drop data (returning ENOBUFS)
    if they receive more than one write when not prepared for it.  */
-error_t
+kern_return_t
 trivfs_S_io_write (struct trivfs_protid *cred,
                    mach_port_t reply,
                    mach_msg_type_name_t replytype,
-                   data_t data,
+                   const_data_t data,
                    mach_msg_type_number_t datalen,
                    off_t offset,
-                   mach_msg_type_number_t *amount)
+                   vm_size_t *amount)
 {
   struct tunnel_device *tdev;
   struct sk_buff *skb;
@@ -391,7 +391,8 @@ trivfs_S_io_write (struct trivfs_protid *cred,
   pthread_mutex_lock (&tdev->lock);
 
   pthread_mutex_lock (&net_bh_lock);
-  skb = alloc_skb (datalen, GFP_ATOMIC);
+  skb = alloc_skb (NET_IP_ALIGN + datalen, GFP_ATOMIC);
+  skb_reserve(skb, NET_IP_ALIGN);
   skb->len = datalen;
   skb->dev = &tdev->dev;
 
@@ -415,7 +416,7 @@ trivfs_S_io_write (struct trivfs_protid *cred,
 kern_return_t
 trivfs_S_io_readable (struct trivfs_protid *cred,
                       mach_port_t reply, mach_msg_type_name_t replytype,
-                      mach_msg_type_number_t *amount)
+                      vm_size_t *amount)
 {
   struct tunnel_device *tdev;
   struct sk_buff *skb;
@@ -525,7 +526,7 @@ io_select_common (struct trivfs_protid *cred,
     }
 }
 
-error_t
+kern_return_t
 trivfs_S_io_select (struct trivfs_protid *cred,
                     mach_port_t reply,
                     mach_msg_type_name_t reply_type,
@@ -534,7 +535,7 @@ trivfs_S_io_select (struct trivfs_protid *cred,
   return io_select_common (cred, reply, reply_type, NULL, type);
 }
 
-error_t
+kern_return_t
 trivfs_S_io_select_timeout (struct trivfs_protid *cred,
 			    mach_port_t reply,
 			    mach_msg_type_name_t reply_type,
@@ -545,7 +546,7 @@ trivfs_S_io_select_timeout (struct trivfs_protid *cred,
 }
 
 /* Change current read/write offset */
-error_t
+kern_return_t
 trivfs_S_io_seek (struct trivfs_protid *cred,
                   mach_port_t reply, mach_msg_type_name_t reply_type,
                   off_t offs, int whence, off_t *new_offs)
@@ -562,7 +563,7 @@ trivfs_S_io_seek (struct trivfs_protid *cred,
 /* Change the size of the file.  If the size increases, new blocks are
    zero-filled.  After successful return, it is safe to reference mapped
    areas of the file up to NEW_SIZE.  */
-error_t
+kern_return_t
 trivfs_S_file_set_size (struct trivfs_protid *cred,
                         mach_port_t reply, mach_msg_type_name_t reply_type,
                         off_t size)
@@ -581,7 +582,7 @@ trivfs_S_file_set_size (struct trivfs_protid *cred,
    will tell you which of O_READ, O_WRITE, and O_EXEC the object can
    be used for.  The O_ASYNC bit affects icky async I/O; good async
    I/O is done through io_async which is orthogonal to these calls. */
-error_t
+kern_return_t
 trivfs_S_io_set_all_openmodes(struct trivfs_protid *cred,
                               mach_port_t reply,
                               mach_msg_type_name_t reply_type,
@@ -596,7 +597,7 @@ trivfs_S_io_set_all_openmodes(struct trivfs_protid *cred,
   return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_set_some_openmodes (struct trivfs_protid *cred,
                                 mach_port_t reply,
                                 mach_msg_type_name_t reply_type,
@@ -611,7 +612,7 @@ trivfs_S_io_set_some_openmodes (struct trivfs_protid *cred,
   return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_clear_some_openmodes (struct trivfs_protid *cred,
                                   mach_port_t reply,
                                   mach_msg_type_name_t reply_type,
@@ -626,7 +627,7 @@ trivfs_S_io_clear_some_openmodes (struct trivfs_protid *cred,
   return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_get_owner (struct trivfs_protid *cred,
                        mach_port_t reply,
                        mach_msg_type_name_t reply_type,
@@ -642,7 +643,7 @@ trivfs_S_io_get_owner (struct trivfs_protid *cred,
   return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_mod_owner (struct trivfs_protid *cred,
                        mach_port_t reply, mach_msg_type_name_t reply_type,
                        pid_t owner)
@@ -664,7 +665,7 @@ trivfs_S_io_mod_owner (struct trivfs_protid *cred,
    implement io_map but not io_map_cntl.  Some objects do not provide
    mapping; they will set none of the ports and return an error.  Such
    objects can still be accessed by io_read and io_write.  */
-error_t
+kern_return_t
 trivfs_S_io_map (struct trivfs_protid *cred,
 		 mach_port_t reply,
 		 mach_msg_type_name_t replyPoly,

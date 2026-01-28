@@ -140,7 +140,7 @@ do_mach_notify_dead_name (struct port_info *pi,
 kern_return_t
 ds_device_open (mach_port_t master_port, mach_port_t reply_port,
 		mach_msg_type_name_t reply_portPoly,
-		dev_mode_t mode, dev_name_t name, mach_port_t *device, 
+		dev_mode_t mode, const_dev_name_t name, mach_port_t *device, 
 		mach_msg_type_name_t *devicetype)
 {
   error_t err;
@@ -175,6 +175,16 @@ ds_device_open (mach_port_t master_port, mach_port_t reply_port,
 }
 
 kern_return_t
+ds_device_open_new (mach_port_t master_port, mach_port_t reply_port,
+		mach_msg_type_name_t reply_portPoly,
+		dev_mode_t mode, const_dev_name_t name, mach_port_t *device,
+		mach_msg_type_name_t *devicetype)
+{
+  return ds_device_open (master_port, reply_port, reply_portPoly, mode,
+      name, device, devicetype);
+}
+
+kern_return_t
 ds_device_close (device_t device)
 {
   return D_INVALID_OPERATION;
@@ -183,8 +193,8 @@ ds_device_close (device_t device)
 kern_return_t
 ds_device_write (device_t device, mach_port_t reply_port,
 		 mach_msg_type_name_t reply_type, dev_mode_t mode,
-		 recnum_t recnum, io_buf_ptr_t data, size_t datalen,
-		 int *bytes_written)
+		 recnum_t recnum, io_buf_ptr_t data,
+		 mach_msg_type_number_t datalen, int *bytes_written)
 {
   return D_INVALID_OPERATION;
 }
@@ -192,8 +202,8 @@ ds_device_write (device_t device, mach_port_t reply_port,
 kern_return_t
 ds_device_write_inband (device_t device, mach_port_t reply_port,
 			mach_msg_type_name_t reply_type, dev_mode_t mode,
-			recnum_t recnum, io_buf_ptr_inband_t data,
-			size_t datalen, int *bytes_written)
+			recnum_t recnum, const io_buf_ptr_inband_t data,
+			mach_msg_type_number_t datalen, int *bytes_written)
 {
   return D_INVALID_OPERATION;
 }
@@ -202,7 +212,7 @@ kern_return_t
 ds_device_read (device_t device, mach_port_t reply_port,
 		mach_msg_type_name_t reply_type, dev_mode_t mode,
 		recnum_t recnum, int bytes_wanted,
-		io_buf_ptr_t *data, size_t *datalen)
+		io_buf_ptr_t *data, mach_msg_type_number_t *datalen)
 {
   return D_INVALID_OPERATION;
 }
@@ -211,7 +221,8 @@ kern_return_t
 ds_device_read_inband (device_t device, mach_port_t reply_port,
 		       mach_msg_type_name_t reply_type, dev_mode_t mode,
 		       recnum_t recnum, int bytes_wanted,
-		       io_buf_ptr_inband_t data, size_t *datalen)
+		       io_buf_ptr_inband_t data,
+		       mach_msg_type_number_t *datalen)
 {
   return D_INVALID_OPERATION;
 }
@@ -225,21 +236,24 @@ ds_device_map (device_t device, vm_prot_t prot, vm_offset_t offset,
 
 kern_return_t
 ds_device_set_status (device_t device, dev_flavor_t flavor,
-		      dev_status_t status, size_t statuslen)
+		      dev_status_t status,
+		      mach_msg_type_number_t statuslen)
 {
   return D_INVALID_OPERATION;
 }
 
 kern_return_t
 ds_device_get_status (device_t device, dev_flavor_t flavor,
-		      dev_status_t status, size_t *statuslen)
+		      dev_status_t status,
+		      mach_msg_type_number_t *statuslen)
 {
   return D_INVALID_OPERATION;
 }
 
 kern_return_t
 ds_device_set_filter (device_t device, mach_port_t receive_port,
-		      int priority, filter_array_t filter, size_t filterlen)
+		      int priority, filter_array_t filter,
+		      mach_msg_type_number_t filterlen)
 {
   return D_INVALID_OPERATION;
 }

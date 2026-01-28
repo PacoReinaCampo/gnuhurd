@@ -30,6 +30,12 @@
 #include <sys/socket.h>
 #include <pthread.h>
 
+/* Unfortunately the Linux source also uses <net/route.h>.
+ * Here we want the glibc-provided one only */
+#define _ROUTE_H
+#include <net/route.h>
+#undef _ROUTE_H
+
 extern pthread_mutex_t global_lock;
 extern pthread_mutex_t net_bh_lock;
 
@@ -77,9 +83,7 @@ error_t make_sockaddr_port (struct socket *, int,
 void init_devices (void);
 void *net_bh_worker (void *);
 void init_time (void);
-void ip_rt_add (short, u_long, u_long, u_long, struct device *,
-		u_short, u_long);
-void ip_rt_del (u_long, struct device *);
+int get_routing_table(int start, int count, ifrtreq_t *routes);
 struct sock;
 error_t tcp_tiocinq (struct sock *sk, mach_msg_type_number_t *amount);
 

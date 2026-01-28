@@ -26,12 +26,12 @@
 
 /* Return in FILE & FILE_TYPE the file in FSYS corresponding to the NFS file
    handle HANDLE & HANDLE_LEN.  */
-error_t
+kern_return_t
 diskfs_S_fsys_getfile (struct diskfs_control *pt,
 		       mach_port_t reply, mach_msg_type_name_t reply_type,
-		       uid_t *uids, mach_msg_type_number_t nuids,
-		       gid_t *gids, mach_msg_type_number_t ngids,
-		       data_t handle, mach_msg_type_number_t handle_len,
+		       const uid_t *uids, mach_msg_type_number_t nuids,
+		       const gid_t *gids, mach_msg_type_number_t ngids,
+		       const_data_t handle, mach_msg_type_number_t handle_len,
 		       mach_port_t *file, mach_msg_type_name_t *file_type)
 {
   int flags;

@@ -324,7 +324,8 @@ mtab_mark_as_seen (struct mtab *mtab, mach_port_t control)
     return TRUE;
 
   hurd_ihash_add (&mtab->ports_seen,
-                  (hurd_ihash_key_t) control, (hurd_ihash_value_t) control);
+                  (hurd_ihash_key_t) control,
+                  (hurd_ihash_value_t)(uintptr_t) control);
   return FALSE;
 }
 
@@ -341,7 +342,7 @@ mtab_populate (struct mtab *mtab, const char *path, mach_port_t control,
   /* These resources are freed in the epilogue.	 */
   file_t node = MACH_PORT_NULL;
   char *argz = NULL;
-  size_t argz_len = 0;
+  mach_msg_type_number_t argz_len = 0;
   char **argv = NULL;
   char *type = NULL;
   char *options = NULL;
@@ -350,9 +351,9 @@ mtab_populate (struct mtab *mtab, const char *path, mach_port_t control,
   char *entry = NULL;
   size_t entry_len = 0;
   char *children = NULL;
-  size_t children_len = 0;
+  mach_msg_type_number_t children_len = 0;
   mach_port_t *controls = NULL;
-  size_t controls_count = 0;
+  mach_msg_type_number_t controls_count = 0;
   size_t i;
 
   if (depth < 0)
@@ -456,11 +457,11 @@ mtab_populate (struct mtab *mtab, const char *path, mach_port_t control,
         if (! MACH_PORT_VALID (controls[i]))
           continue;
 
-	asprintf (&p, "%s%s%s",
-		  path,
-		  path[strlen (path) - 1] == '/'? "": "/",
-		  c);
-	if (! p)
+	err = asprintf (&p, "%s%s%s",
+			path,
+			path[strlen (path) - 1] == '/'? "": "/",
+			c);
+	if (err == -1)
 	  {
 	    err = ENOMEM;
 	    goto errout;
@@ -534,8 +535,8 @@ argz_add_device (char **options, size_t *options_len, const char *device)
 
   /* device specifies a size.  */
   char *arg = NULL;
-  asprintf (&arg, "size=%s", device);
-  if (! arg)
+  err = asprintf (&arg, "size=%s", device);
+  if (err == -1)
     return ENOMEM;
 
   err = argz_add (options, options_len, arg);
@@ -562,12 +563,35 @@ looks_like_block_device (const char *s)
 error_t
 map_device_to_path (const char *device, char **path)
 {
+  int err;
+  int part = -1;
+  if (strncmp (device, "part:", 5) == 0)
+    {
+      const char *next = strchr(device + 5, ':');
+
+      if (next)
+	{
+	  part = atoi(device + 5);
+	  device = next + 1;
+	}
+    }
   if (strncmp (device, "device:", 7) == 0)
-    asprintf (path, "/dev/%s", &device[7]);
+    {
+      if (part >= 0)
+	err = asprintf (path, "/dev/%ss%u", &device[7], part);
+      else
+	err = asprintf (path, "/dev/%s", &device[7]);
+      if (err == -1)
+	return ENOMEM;
+    }
   else if (strncmp (device, "/dev/", 5) == 0)
     *path = strdup (device);
   else if (looks_like_block_device (device))
-    asprintf (path, "/dev/%s", device);
+    {
+      err = asprintf (path, "/dev/%s", device);
+      if (err == -1)
+	return ENOMEM;
+    }
   else
     *path = strdup (device);
 
@@ -629,7 +653,7 @@ close_hook (struct trivfs_peropen *peropen)
   pthread_mutex_destroy (&op->lock);
   free (op->contents);
   HURD_IHASH_ITERATE (&op->ports_seen, p)
-    mach_port_deallocate (mach_task_self (), (mach_port_t) p);
+    mach_port_deallocate (mach_task_self (), (mach_port_t)(uintptr_t) p);
   hurd_ihash_destroy (&op->ports_seen);
   free (op);
 }
@@ -637,11 +661,11 @@ close_hook (struct trivfs_peropen *peropen)
 /* Read data from an IO object.	 If offset is -1, read from the object
    maintained file pointer.  If the object is not seekable, offset is
    ignored.  The amount desired to be read is in AMOUNT.  */
-error_t
+kern_return_t
 trivfs_S_io_read (struct trivfs_protid *cred,
 		  mach_port_t reply, mach_msg_type_name_t reply_type,
 		  data_t *data, mach_msg_type_number_t *data_len,
-		  loff_t offs, mach_msg_type_number_t amount)
+		  off_t offs, vm_size_t amount)
 {
   error_t err = 0;
   struct mtab *op;
@@ -701,7 +725,7 @@ trivfs_S_io_read (struct trivfs_protid *cred,
 
 
 /* Change current read/write offset */
-error_t
+kern_return_t
 trivfs_S_io_seek (struct trivfs_protid *cred,
 		  mach_port_t reply, mach_msg_type_name_t reply_type,
 		  off_t offs, int whence, off_t *new_offs)
@@ -758,7 +782,7 @@ void (*trivfs_peropen_destroy_hook) (struct trivfs_peropen *) = close_hook;
 kern_return_t
 trivfs_S_io_readable (struct trivfs_protid *cred,
 		      mach_port_t reply, mach_msg_type_name_t replytype,
-		      mach_msg_type_number_t *amount)
+		      vm_size_t *amount)
 {
   error_t err = 0;
   if (!cred)
@@ -827,7 +851,7 @@ trivfs_S_io_get_openmodes (struct trivfs_protid *cred,
   return 0;
 }
 
-error_t
+kern_return_t
 trivfs_S_io_set_all_openmodes(struct trivfs_protid *cred,
 			      mach_port_t reply,
 			      mach_msg_type_name_t replytype,

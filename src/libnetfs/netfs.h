@@ -142,7 +142,7 @@ error_t netfs_attempt_chmod (struct iouser *cred, struct node *np,
 /* The user must define this function.  Attempt to turn locked node NP
    (user CRED) into a symlink with target NAME.  */
 error_t netfs_attempt_mksymlink (struct iouser *cred, struct node *np,
-				 char *name);
+				 const char *name);
 
 /* The user must define this function.  Attempt to turn NODE (user
    CRED) into a device.  TYPE is either S_IFBLK or S_IFCHR.  NP is
@@ -154,7 +154,7 @@ error_t netfs_attempt_mkdev (struct iouser *cred, struct node *np,
    translator record for FILE to ARGZ (of length ARGZLEN) for user
    CRED. NP is locked.  */
 error_t netfs_set_translator (struct iouser *cred, struct node *np,
-			      char *argz, size_t argzlen);
+			      const char *argz, mach_msg_type_number_t argzlen);
 
 /* The user may define this function (but should define it together
    with netfs_set_translator).  For locked node NODE with S_IPTRANS
@@ -162,7 +162,7 @@ error_t netfs_set_translator (struct iouser *cred, struct node *np,
    name into newly malloced storage, and return it in *ARGZ; set
    *ARGZ_LEN to the total length.  */
 error_t netfs_get_translator (struct node *node, char **argz,
-			      size_t *argz_len);
+			      mach_msg_type_number_t *argz_len);
 
 /* The user must define this function.  This should attempt a chflags
    call for the user specified by CRED on locked node NP, to change
@@ -205,30 +205,30 @@ error_t netfs_attempt_syncfs (struct iouser *cred, int wait);
    (*NP, if found, should be locked and a reference to it generated.
    This call should unlock DIR no matter what.)  */
 error_t netfs_attempt_lookup (struct iouser *user, struct node *dir,
-			      char *name, struct node **np);
+			      const char *name, struct node **np);
 
 /* The user must define this function.  Delete NAME in DIR (which is
    locked) for USER.  */
 error_t netfs_attempt_unlink (struct iouser *user, struct node *dir,
-			      char *name);
+			      const char *name);
 
 /* The user must define this function.  Attempt to rename the
    directory FROMDIR to TODIR. Note that neither of the specific nodes
    are locked.  */
 error_t netfs_attempt_rename (struct iouser *user, struct node *fromdir,
-			      char *fromname, struct node *todir,
-			      char *toname, int excl);
+			      const char *fromname, struct node *todir,
+			      const char *toname, int excl);
 
 /* The user must define this function.  Attempt to create a new
    directory named NAME in DIR (which is locked) for USER with mode
    MODE. */
 error_t netfs_attempt_mkdir (struct iouser *user, struct node *dir,
-			     char *name, mode_t mode);
+			     const char *name, mode_t mode);
 
 /* The user must define this function.  Attempt to remove directory
    named NAME in DIR (which is locked) for USER.  */
 error_t netfs_attempt_rmdir (struct iouser *user,
-			     struct node *dir, char *name);
+			     struct node *dir, const char *name);
 
 
 /* The user must define this function.  Create a link in DIR with name
@@ -236,7 +236,7 @@ error_t netfs_attempt_rmdir (struct iouser *user,
    locked. If EXCL is set, do not delete the target.  Return EEXIST if
    NAME is already found in DIR.  */
 error_t netfs_attempt_link (struct iouser *user, struct node *dir,
-			    struct node *file, char *name, int excl);
+			    struct node *file, const char *name, int excl);
 
 /* The user must define this function.  Attempt to create an anonymous
    file related to DIR (which is locked) for USER with MODE.  Set *NP
@@ -249,7 +249,7 @@ error_t netfs_attempt_mkfile (struct iouser *user, struct node *dir,
    new node upon return.  On any error, clear *NP.  *NP should be
    locked on success; no matter what, unlock DIR before returning.  */
 error_t netfs_attempt_create_file (struct iouser *user, struct node *dir,
-				   char *name, mode_t mode, struct node **np);
+				   const char *name, mode_t mode, struct node **np);
 
 /* The user must define this function.  Read the contents of locked
    node NP (a symlink), for USER, into BUF.  */
@@ -275,7 +275,7 @@ error_t netfs_attempt_read (struct iouser *cred, struct node *np,
    from DATA.  Set *LEN to the amount successfully written upon
    return.  */
 error_t netfs_attempt_write (struct iouser *cred, struct node *np,
-			     loff_t offset, size_t *len, void *data);
+			     loff_t offset, size_t *len, const void *data);
 
 /* The user must define this function.  Return the valid access
    types (bitwise OR of O_READ, O_WRITE, and O_EXEC) in *TYPES for
@@ -302,6 +302,11 @@ error_t netfs_get_dirents (struct iouser *cred, struct node *dir,
                            int entry, int nentries, char **data,
 			   mach_msg_type_number_t *datacnt,
 			   vm_size_t bufsize, int *amt);
+
+/* The user may define this function. Return a memory object proxy port (send
+   right) for the file contents of NP. PROT is the maximum allowable
+   access. On errors, return MACH_PORT_NULL and set errno.  */
+mach_port_t netfs_get_filemap (struct node *np, vm_prot_t prot);
 
 /* The user may define this function.  For a full description,
    see hurd/hurd_types.h.  The default response indicates a network
@@ -330,7 +335,7 @@ error_t netfs_get_source (char *source, size_t source_len);
 /* Parse and execute the runtime options in ARGZ & ARGZ_LEN.  EINVAL is
    returned if some option is unrecognized.  The default definition of this
    routine will parse them using NETFS_RUNTIME_ARGP. */
-error_t netfs_set_options (char *argz, size_t argz_len);
+error_t netfs_set_options (const char *argz, size_t argz_len);
 
 /* Append to the malloced string *ARGZ of length *ARGZ_LEN a NUL-separated
    list of the arguments to this translator.  The default definition of this
@@ -404,7 +409,8 @@ void netfs_init (void);
 
 /* Starts the netfs server.  Called after netfs_init. BOOTSTRAP is
    the bootstrap port.  FLAGS indicate how to open the underlying node
-   (Cf. hurd/fsys.defs).  */
+   that's being translated (Cf. hurd/fsys.defs).  Returns a port to
+   such node.  */
 mach_port_t netfs_startup (mach_port_t bootstrap, int flags);
 
 /* Normally called as the last function in main.  The netfs server now
@@ -488,7 +494,7 @@ typedef struct netfs_control *control_t;
    or missing -D_FILE_OFFSET_BITS=64 build flag. */
 
 kern_return_t netfs_S_io_write (protid_t io_object,
-				data_t data,
+				const_data_t data,
 				mach_msg_type_number_t dataCnt,
 				loff_t offset,
 				vm_size_t *amount);
